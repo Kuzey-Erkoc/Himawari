@@ -1,0 +1,6 @@
+subset,forecast,n,mean_actual,bias,mae,rmse,rel_mae,corr
+all,best_match | short lead,7168,559.869,-42.819,52.8,71.974,0.094,0.977
+all,ecmwf_ifs025 | short lead,7168,559.869,-44.856,55.135,69.984,0.098,0.981
+all,gfs_global | short lead,7168,559.869,-31.389,50.029,78.904,0.089,0.964
+all,always clear sky,13677,551.136,18.497,68.424,118.233,0.124,0.898
+all,same as yesterday,13017,555.935,-4.246,64.532,130.723,0.116,0.878
