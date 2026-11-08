@@ -311,9 +311,11 @@ def main():
         race |= np.array([t0 <= t < t1 for t in times])
     subsets = [("all", np.ones((n, T), bool)), ("north", north[:, None] & np.ones(T, bool)),
                ("south", ~north[:, None] & np.ones(T, bool)), ("race week", race[None, :] & np.ones((n, 1), bool))]
+    # fair comparison: every forecast is scored on the same hours (where all of them exist)
+    all_fc = np.all([np.isfinite(series[k]) for k in fc_names], axis=0)
     for sub, msk in subsets:
         for k in fc_names:
-            mm = common & msk & np.isfinite(series[k])
+            mm = common & msk & all_fc
             r = metrics(np.where(mm, series[k], np.nan), np.where(mm, y, np.nan))
             if r:
                 rows_h.append(dict(subset=sub, forecast=k, **{x: round(v, 3) if isinstance(v, float) else v
@@ -346,6 +348,9 @@ def main():
         return out
     dy = daily(y)
     dser = {k: daily(v) for k, v in series.items() if k != "actual"}
+    d_all = np.all([np.isfinite(v) for v in dser.values()], axis=0) & np.isfinite(dy)
+    dy = np.where(d_all, dy, np.nan)
+    dser = {k: np.where(d_all, v, np.nan) for k, v in dser.items()}
     rows_d = []
     for k, v in dser.items():
         r = metrics(v, dy)
@@ -480,7 +485,7 @@ def main():
     md = [f"# Open-Meteo sunshine forecasts vs. satellite-derived actual values",
           "",
           f"Periods: {', '.join(f'{s} – {e}' for s, e in periods)}; {n} route points; "
-          f"daytime hours only (clear-sky GHI > 50 W/m²). Actual = Himawari-derived GHI "
+          f"daytime hours only (clear-sky GHI > 50 W/m²); every forecast is scored on the same hours. Actual = Himawari-derived GHI "
           f"(Open-Meteo Satellite Radiation API), not a ground measurement.",
           "",
           "## Hourly values",
