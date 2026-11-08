@@ -1,1 +1,9 @@
 __pycache__/
+
+# Outputs that the scripts rewrite on every run (not part of the code)
+himawari/result_b13/
+himawari/result_trm/
+himawari/trip_forecast/
+himawari/openmeteo_nwp_cache.json
+himawari/himawari_b13/
+himawari/himawari_trm/
