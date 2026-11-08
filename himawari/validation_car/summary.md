@@ -1,24 +1,26 @@
 # Sunshine forecasts vs. our own car's weather station (WSC 2025)
 
-Race days 24.08. – 28.08.2025; 29 daytime hours along the car's track (common sample: every method has a value). Truth = the car's own GHI sensor, hourly means. Forecast values are taken at the place where the car was in each minute.
+Race days 24.08. – 28.08.2025; 46 daytime hours along the car's track (common sample: every method has a value). Truth = the car's own GHI sensor, hourly means. Forecast values are taken at the place where the car was in each minute.
 
-Left out of the common sample (too few values): ecmwf_ifs025, 1 day ahead, ecmwf_ifs025, 2 days ahead, satellite +1 h (cloudiness stays), satellite +2 h (cloudiness stays), satellite +3 h (cloudiness stays), car sensor +1 h (measured stays), car sensor +2 h (measured stays), car sensor +3 h (measured stays)
+Left out of the common sample (too few values): satellite +1 h (cloudiness stays), satellite +2 h (cloudiness stays), satellite +3 h (cloudiness stays), car sensor +1 h (measured stays), car sensor +2 h (measured stays), car sensor +3 h (measured stays)
 
 ## Error per method (hourly, W/m²)
 | Method | Mean error | 90 % interval | vs. satellite (90 %) | Bias | Correlation |
 |---|---|---|---|---|---|
-| satellite analysis | 27 | 16–38 | +0 … +0 | +15 | 0.99 |
-| gfs_global, 1 day ahead | 31 | 20–36 | -9 … +12 | -10 | 0.99 |
-| best_match, 2 days ahead | 39 | 33–50 | +2 … +27 | -33 | 0.99 |
-| icon_global, 2 days ahead | 39 | 33–50 | +2 … +27 | -33 | 0.99 |
-| best_match, short lead | 40 | 28–53 | -0 … +25 | -27 | 0.99 |
-| gfs_global, 2 days ahead | 42 | 21–59 | -5 … +31 | -3 | 0.95 |
-| ecmwf_ifs025, short lead | 43 | 31–57 | +2 … +30 | -18 | 0.98 |
-| icon_global, short lead | 44 | 34–57 | +5 … +32 | -30 | 0.99 |
-| gfs_global, short lead | 45 | 24–62 | -3 … +33 | -33 | 0.97 |
-| best_match, 1 day ahead | 46 | 34–64 | +6 … +37 | -37 | 0.98 |
-| icon_global, 1 day ahead | 46 | 34–64 | +6 … +37 | -37 | 0.98 |
-| always clear sky | 53 | 24–74 | -4 … +45 | +15 | 0.92 |
+| satellite analysis | 30 | 22–38 | +0 … +0 | +16 | 0.99 |
+| best_match, short lead | 49 | 37–67 | +6 … +37 | -38 | 0.97 |
+| ecmwf_ifs025, 1 day ahead | 49 | 37–66 | +6 … +37 | -31 | 0.97 |
+| ecmwf_ifs025, 2 days ahead | 50 | 38–66 | +7 … +36 | -33 | 0.97 |
+| ecmwf_ifs025, short lead | 51 | 38–68 | +7 … +38 | -34 | 0.97 |
+| best_match, 2 days ahead | 51 | 42–62 | +9 … +34 | -45 | 0.98 |
+| icon_global, 2 days ahead | 51 | 42–62 | +9 … +34 | -45 | 0.98 |
+| best_match, 1 day ahead | 52 | 43–67 | +11 … +38 | -47 | 0.98 |
+| icon_global, 1 day ahead | 52 | 43–67 | +11 … +38 | -47 | 0.98 |
+| always clear sky | 54 | 32–80 | +3 … +49 | +22 | 0.93 |
+| icon_global, short lead | 56 | 46–68 | +15 … +38 | -47 | 0.98 |
+| gfs_global, short lead | 69 | 43–98 | +14 … +67 | -54 | 0.94 |
+| gfs_global, 1 day ahead | 74 | 41–116 | +12 … +84 | -53 | 0.91 |
+| gfs_global, 2 days ahead | 76 | 47–112 | +17 … +80 | -42 | 0.90 |
 
 'vs. satellite': how much larger the mean error is than that of the satellite analysis. If the interval does not include 0, the difference is clear; otherwise the data cannot separate the two.
 
@@ -28,37 +30,39 @@ Each column on its own common sample (hours where every method has a value). Per
 
 | Method | 0 h | +1 h | +2 h | +3 h |
 |---|---|---|---|---|
-| satellite (0 h: analysis, later: cloudiness stays) | 19 | 21 | 19 | 16 |
-| best_match, short lead | 27 | 28 | 29 | 29 |
-| ecmwf_ifs025, short lead | 31 | 34 | 36 | 34 |
-| gfs_global, short lead | 20 | 21 | 19 | 17 |
-| icon_global, short lead | 32 | 33 | 33 | 33 |
-| best_match, 1 day ahead | 30 | 31 | 31 | 30 |
-| ecmwf_ifs025, 1 day ahead | 32 | 35 | 36 | 34 |
-| gfs_global, 1 day ahead | 16 | 17 | 14 | 12 |
-| icon_global, 1 day ahead | 30 | 31 | 31 | 30 |
-| always clear sky | 26 | 28 | 27 | 27 |
-| car sensor (measured stays) | – | 29 | 56 | 79 |
-| hours in sample | 13 | 12 | 10 | 8 |
+| satellite (0 h: analysis, later: cloudiness stays) | 30 | 40 | 37 | 40 |
+| best_match, short lead | 49 | 52 | 53 | 57 |
+| ecmwf_ifs025, short lead | 51 | 54 | 57 | 61 |
+| gfs_global, short lead | 69 | 73 | 77 | 83 |
+| icon_global, short lead | 56 | 57 | 59 | 62 |
+| best_match, 1 day ahead | 52 | 54 | 56 | 57 |
+| ecmwf_ifs025, 1 day ahead | 49 | 53 | 55 | 58 |
+| gfs_global, 1 day ahead | 74 | 79 | 83 | 90 |
+| icon_global, 1 day ahead | 52 | 54 | 56 | 57 |
+| always clear sky | 54 | 58 | 58 | 63 |
+| car sensor (measured stays) | – | 47 | 68 | 75 |
+| hours in sample | 46 | 42 | 37 | 32 |
 
 ## Energy while driving, per race day (kWh/m²)
 
-| Method | 08-24 | 08-25 | 08-26 | mean abs. error |
-|---|---|---|---|---|
-| **measured (car)** | 6.44 | 6.48 | 4.11 | |
-| satellite analysis | 6.62 | 6.61 | 4.24 | 0.15 |
-| gfs_global, 1 day ahead | 6.32 | 6.18 | 4.25 | 0.19 |
-| ecmwf_ifs025, short lead | 6.18 | 6.18 | 4.16 | 0.20 |
-| best_match, short lead | 6.20 | 6.19 | 3.87 | 0.26 |
-| gfs_global, 2 days ahead | 6.31 | 6.18 | 4.47 | 0.26 |
-| icon_global, short lead | 6.17 | 6.07 | 3.93 | 0.29 |
-| best_match, 2 days ahead | 6.19 | 6.05 | 3.85 | 0.31 |
-| gfs_global, short lead | 6.37 | 6.19 | 3.53 | 0.31 |
-| icon_global, 2 days ahead | 6.19 | 6.05 | 3.85 | 0.31 |
-| best_match, 1 day ahead | 6.19 | 6.06 | 3.71 | 0.36 |
-| icon_global, 1 day ahead | 6.19 | 6.06 | 3.71 | 0.36 |
-| always clear sky | 6.29 | 6.20 | 4.98 | 0.43 |
-| hours | 10 | 11 | 8 | |
+| Method | 08-24 | 08-25 | 08-26 | 08-27 | 08-28 | mean abs. error |
+|---|---|---|---|---|---|---|
+| **measured (car)** | 6.44 | 6.48 | 4.62 | 5.11 | 2.25 | |
+| satellite analysis | 6.62 | 6.61 | 4.80 | 5.16 | 2.43 | 0.14 |
+| ecmwf_ifs025, 1 day ahead | 6.17 | 6.17 | 4.44 | 4.56 | 2.15 | 0.28 |
+| ecmwf_ifs025, 2 days ahead | 6.19 | 6.15 | 4.42 | 4.53 | 2.08 | 0.31 |
+| ecmwf_ifs025, short lead | 6.18 | 6.18 | 4.34 | 4.50 | 2.16 | 0.31 |
+| best_match, short lead | 6.20 | 6.19 | 4.02 | 4.50 | 2.24 | 0.35 |
+| always clear sky | 6.29 | 6.20 | 5.66 | 5.19 | 2.61 | 0.38 |
+| gfs_global, 2 days ahead | 6.31 | 6.18 | 4.54 | 3.71 | 2.24 | 0.38 |
+| best_match, 2 days ahead | 6.19 | 6.05 | 4.05 | 4.43 | 2.12 | 0.41 |
+| icon_global, 2 days ahead | 6.19 | 6.05 | 4.05 | 4.43 | 2.12 | 0.41 |
+| best_match, 1 day ahead | 6.19 | 6.06 | 3.95 | 4.55 | 2.02 | 0.43 |
+| icon_global, 1 day ahead | 6.19 | 6.06 | 3.95 | 4.55 | 2.02 | 0.43 |
+| icon_global, short lead | 6.17 | 6.07 | 4.18 | 4.37 | 1.96 | 0.43 |
+| gfs_global, 1 day ahead | 6.32 | 6.18 | 4.37 | 3.38 | 2.23 | 0.48 |
+| gfs_global, short lead | 6.37 | 6.19 | 3.63 | 4.03 | 2.21 | 0.49 |
+| hours | 10 | 11 | 10 | 10 | 5 | |
 
 ## Checks
 
