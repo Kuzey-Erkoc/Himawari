@@ -15,6 +15,10 @@ Times are local race time (ACST = UTC+9:30, valid for NT and SA in August) unles
 At most the next 5 days are calculated (--max-days): further ahead the forecasts are too
 unreliable. If the finish is not reached by then, the trip ends where the car is.
 
+Default model: ECMWF (best in the validation, om_valid.py). All models forecast too little
+sunshine; their values are multiplied by a factor per model (BIAS_FACTOR, ECMWF × 1.06,
+checked against the car's weather station), off with --no-bias-correction.
+
 Output (folder trip_forecast/):
   trip_forecast.csv    every 5 minutes: time, km, position, driving/stopped, GHI per model
   trip_forecast.png    sunshine along the trip and position over time
@@ -25,7 +29,8 @@ Usage:
     python trip_forecast.py --start "2027-08-22 08:30" --speed 80
     python trip_forecast.py --start now --speed 85 --start-km 850       # car is at km 850 now
     python trip_forecast.py --start "2025-08-24 08:00" --speed 80       # replay with actual values
-    python trip_forecast.py --start now --speed 80 --models best_match,ecmwf_ifs025,gfs_global
+    python trip_forecast.py --start now --speed 80 --models ecmwf_ifs025,gfs_global,icon_global
+    python trip_forecast.py --start now --speed 80 --no-bias-correction   # raw model values
     python trip_forecast.py --start now --speed 80 --panel-area 4 --efficiency 0.24   # + kWh for the car
     python trip_forecast.py --start now --speed 80 --no-driving-window  # drive non-stop
 """
@@ -49,6 +54,10 @@ STEP = dt.timedelta(minutes=5)
 BATCH = 50
 TIMEOUT = 30
 UA = "himawari-nowcast-trip/1.0 (research)"
+# Bias correction: all models forecast systematically too little sunshine. Factor per model,
+# from om_valid.py (Aug 2025+2026 vs. satellite) and checked against the car's weather station
+# in the WSC 2025 (validate_car.py). Same values as BIAS_FACTOR in main.py.
+BIAS_FACTOR = {"ecmwf_ifs025": 1.06, "gfs_global": 1.03, "icon_global": 1.09, "best_match": 1.06}
 
 
 # ---------------------------------------------------------------- route and sun
@@ -390,7 +399,12 @@ def main():
     p.add_argument("--drive-from", default="08:00", help="daily driving window start, local")
     p.add_argument("--drive-until", default="17:00", help="daily driving window end, local")
     p.add_argument("--no-driving-window", action="store_true", help="drive day and night")
-    p.add_argument("--models", default="best_match", help="Open-Meteo models, comma-separated")
+    p.add_argument("--models", default="ecmwf_ifs025",
+                   help="Open-Meteo models, comma-separated (default ecmwf_ifs025 – the best one in "
+                        "the validation; also gfs_global, icon_global, best_match)")
+    p.add_argument("--no-bias-correction", action="store_true",
+                   help="use the model values as they come (default: multiply by BIAS_FACTOR, "
+                        "e.g. ECMWF × 1.06)")
     p.add_argument("--cloud-index", type=float, default=0.7,
                    help="'cloud' = less than this share of the clear-sky sunshine (default 0.7)")
     p.add_argument("--max-days", type=float, default=5,
@@ -458,8 +472,11 @@ def main():
     for m in [x.strip() for x in a.models.split(",") if x.strip()]:
         s, block = get_series(url, pts, dict(base, models=m), m)
         if s:
+            fac = 1.0 if a.no_bias_correction else BIAS_FACTOR.get(m, 1.0)
+            s.k = np.clip(s.k * fac, 0, 1.3)
             series[m] = s
-            print(f"  {m}: {block.replace('_', ' ')} values")
+            print(f"  {m}: {block.replace('_', ' ')} values"
+                  + (f", × {fac:.2f} bias-corrected" if fac != 1.0 else ""))
     if past:
         s, block = get_series(SAT_URL, pts, dict(base, models="satellite_radiation_seamless"),
                               "actual (satellite)")
