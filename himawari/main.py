@@ -43,7 +43,9 @@ For each band the script:
    little (in a race the newest available run is usually several hours old);
    --nwp-source previous_day1 shows the forecast made 24 h before instead. Model data are
    cached in openmeteo_nwp_cache.json for 60 min (--nwp-cache-min), because models update
-   only every few hours and Open-Meteo limits free requests.
+   only every few hours and Open-Meteo limits free requests. All models forecast too little
+   sunshine; their values are multiplied by a factor per model (BIAS_FACTOR, ECMWF × 1.06,
+   from om_valid.py and the car's weather station), off with --no-bias-correction.
    Now + cloud change: the newest measured sunshine plus the change the moving clouds bring
    (difference of the calibrated brightness now and later), so the unsure brightness ->
    sunshine conversion only enters as a difference.
@@ -141,7 +143,12 @@ NORTH_LAT = -23.44         # Tropic of Capricorn: route split into 'north' (trop
 OM_FC_URL = "https://api.open-meteo.com/v1/forecast"                 # weather-model forecasts
 OM_PREV_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"  # forecasts made 24 h ago
 NWP_MODELS = ("best_match", "ecmwf_ifs025", "gfs_global", "icon_global")   # columns in history
-NWP_DEFAULT = "best_match,ecmwf_ifs025,gfs_global"
+NWP_DEFAULT = "ecmwf_ifs025,gfs_global,best_match"     # the first one is used in the blend
+# Bias correction: all models forecast systematically too little sunshine. Factor per model,
+# from om_valid.py (Aug 2025+2026 vs. satellite, learned on the other year) and checked against
+# the car's own weather station in the WSC 2025 (validate_car.py; the satellite reads ~3 %
+# too bright there, so the factors are taken ~3 % below the satellite-based ones).
+BIAS_FACTOR = {"ecmwf_ifs025": 1.06, "gfs_global": 1.03, "icon_global": 1.09, "best_match": 1.06}
 OUTPUT_PREFIXES = ("forecast_", "final_forecast", "change_", "motion_field", "motion_24h",
                    "animation", "border_mask", "skill_curve", "route_", "nwp_compare")
 
@@ -511,8 +518,9 @@ class NWPForecast:
     stamps, so the day/night curve comes from our own clear-sky model (smooth), the clouds
     from the weather model. Points/times without daylight are NaN."""
 
-    def __init__(self, model, stamps, ghi, lat, lon):
+    def __init__(self, model, stamps, ghi, lat, lon, factor=1.0):
         self.model = model
+        self.factor = factor
         order = np.argsort(stamps)
         self.stamps = [stamps[i] for i in order]
         self.sec = np.array([s.timestamp() for s in self.stamps])
@@ -521,7 +529,7 @@ class NWPForecast:
         for j, s in enumerate(self.stamps):
             gcs, cz = clear_sky_ghi(lat, lon, s)
             ok = (cz > MIN_COSZ) & np.isfinite(g[j])
-            k[j, ok] = np.clip(g[j, ok] / gcs[ok], 0, 1.5)
+            k[j, ok] = np.clip(g[j, ok] / gcs[ok] * factor, 0, 1.5)
         self.k = k
 
     def k_at(self, t):
@@ -543,13 +551,14 @@ class NWPForecast:
         return clear_sky_ghi(lat, lon, t)[0] * self.k_at(t)
 
 
-def fetch_nwp(pts, t0, t1, models, source, cache_path, cache_min):
+def fetch_nwp(pts, t0, t1, models, source, cache_path, cache_min, bias=None):
     """Irradiance forecasts of weather models (ECMWF, GFS, …) from Open-Meteo for the route
     points, t0 … t1 (past and future). source 'forecast' = latest runs (for the past Open-Meteo
     joins the first hours of each run, i.e. short lead times); 'previous_day1' = what the model
     predicted 24 h earlier. Results are cached in cache_path for cache_min minutes, because
     weather models update only every 1–12 h and Open-Meteo limits free requests.
-    Returns {model: NWPForecast}."""
+    bias: {model: factor} applied to the forecast (bias correction); the cache keeps the raw
+    values. Returns {model: NWPForecast}."""
     lat = np.array([p[0] for p in pts])
     lon = np.array([p[1] for p in pts])
     key = json.dumps([source, len(pts), pts[0][:2], pts[-1][:2], f"{t0:%Y-%m-%d}",
@@ -614,8 +623,9 @@ def fetch_nwp(pts, t0, t1, models, source, cache_path, cache_min):
         _NWP_MEM[f"{key}|{model}"] = entry
         stamps = [dt.datetime.strptime(s, "%Y-%m-%dT%H:%M") for s in entry["stamps"]]
         ghi = [[np.nan if x is None else x for x in row] for row in entry["ghi"]]
-        out[model] = NWPForecast(model, stamps, ghi, lat, lon)
-        notes.append(f"{model} {how}")
+        fac = (bias or {}).get(model, 1.0)
+        out[model] = NWPForecast(model, stamps, ghi, lat, lon, fac)
+        notes.append(f"{model} {how}" + (f" (× {fac:.2f} bias-corrected)" if fac != 1.0 else ""))
     if fresh and cache_path:
         cache = {k: v for k, v in cache.items() if now_s - v.get("fetched", 0) < 86400}
         cache.update(fresh)
@@ -1543,14 +1553,18 @@ def run_band(band, a, now, route_pts):
                     t_end = tlist[-1] + dt.timedelta(minutes=a.route_lead + 60)
                     irr["nwp"] = fetch_nwp(route_pts, tlist[0], t_end, models, a.nwp_source,
                                            os.path.join(a.out_root, "openmeteo_nwp_cache.json"),
-                                           a.nwp_cache_min)
+                                           a.nwp_cache_min,
+                                           None if a.no_bias_correction else BIAS_FACTOR)
                     prim = next((m for m in models if m in irr["nwp"] and m in NWP_MODELS), None)
                     if prim:
                         # blend: weights learned from tests that started before this 24-h
                         # window, so the blend is scored on data it has not seen
                         irr["nwp_primary"] = prim
+                        # corrected and raw model values must not be mixed in the blend statistics
+                        fac = irr["nwp"][prim].factor
+                        irr["blend_key"] = prim if fac == 1.0 else f"{prim} x{fac:.2f}"
                         blend_path = os.path.join(out_dir, "blend_stats.json")
-                        blend_tests = load_blend_stats(blend_path, prim)
+                        blend_tests = load_blend_stats(blend_path, irr["blend_key"])
                         irr["blend_w"] = weights_from_stats(blend_tests, before=tlist[0],
                                                             keep=keep_hist)
 
@@ -1636,7 +1650,7 @@ def run_band(band, a, now, route_pts):
     blend_W = None
     if blend_path and new_grams:
         blend_tests.update(new_grams)
-        save_blend_stats(blend_path, irr["nwp_primary"], blend_tests)
+        save_blend_stats(blend_path, irr.get("blend_key", irr["nwp_primary"]), blend_tests)
         blend_W = weights_from_stats(blend_tests, keep=keep_hist)
         whole = blend_W.get("", {})
         if whole:
@@ -1922,6 +1936,9 @@ def main():
     p.add_argument("--nwp-source", choices=["forecast", "previous_day1"], default="forecast",
                    help="'forecast' = latest model runs (for the past: first hours of each run); "
                         "'previous_day1' = what the models predicted 24 h earlier")
+    p.add_argument("--no-bias-correction", action="store_true",
+                   help="use the weather-model values as they come (default: multiply by the "
+                        "factors in BIAS_FACTOR, e.g. ECMWF × 1.06)")
     p.add_argument("--nwp-cache-min", type=float, default=60,
                    help="re-use fetched weather-model data for this many minutes (default 60)")
     p.add_argument("--no-irradiance", action="store_true",
