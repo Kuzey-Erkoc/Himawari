@@ -21,20 +21,30 @@ race strategy cares about). Two simple references show whether a forecast is wor
 Output (folder validation_openmeteo/):
   data_hourly.csv          all hourly values (point, time, actual, every forecast)
   metrics_hourly.csv       bias, MAE, RMSE, correlation per forecast (daytime hours)
-  metrics_daily.csv        error of the daily energy per forecast
-  metrics_by_region.csv    the same split north / south of 23.4°S, and race week only
+  metrics_daily.csv        error of the daily energy per forecast (complete days only),
+                           also split north / south / race week / change days / steady days
+  metrics_by_region.csv    hourly metrics split north / south of 23.4°S, race week,
+                           weather-change days and steady days
+  bias_factors.csv         bias-correction factor per model and lead (learned on the other period)
   summary.md               the main results in words and tables
   fig_timeseries.png       actual vs. forecasts at Darwin, Alice Springs, Adelaide (race week)
   fig_errors.png           mean error and bias per forecast and lead time
   fig_daily_energy.png     daily energy: forecast vs. actual
   fig_hour_of_day.png      bias by hour of day (does the model miss mornings/afternoons?)
+  fig_regions_changes.png  error north vs. south, and on steady vs. weather-change days
+
+Bias correction: all models turned out systematically too dark. Every forecast is therefore
+also evaluated multiplied by one factor per model and lead ("… | corrected"). The factor is
+learned on the other period only (2025 → applied to 2026, 2026 → 2025), so it is a fair test.
+Weather-change days: days whose daily energy differs by more than 1 kWh/m² from the day before
+(--change-kwh). On these days "same as yesterday" is wrong by definition.
 
 Usage:
     pip install numpy requests matplotlib
-    python validate_openmeteo.py                       # race seasons 2025 and 2026
-    python validate_openmeteo.py --period 2025-08-22 2025-08-29   # one period
-    python validate_openmeteo.py --every 3             # more route points (default every 5th)
-    python validate_openmeteo.py --models best_match,ecmwf_ifs025,gfs_global,icon_global
+    python om_valid.py                       # race seasons 2025 and 2026
+    python om_valid.py --period 2025-08-22 2025-08-29   # one period
+    python om_valid.py --every 3             # more route points (default every 5th)
+    python om_valid.py --models best_match,ecmwf_ifs025,gfs_global,icon_global
 Send the folder validation_openmeteo/ (or at least the CSV files and summary.md) back for
 the evaluation.
 """
@@ -210,6 +220,9 @@ def main():
                    help="date range YYYY-MM-DD YYYY-MM-DD (repeatable); default race seasons 2025+2026")
     p.add_argument("--models", default=DEFAULT_MODELS)
     p.add_argument("--every", type=int, default=5, help="use every N-th route point (default 5)")
+    p.add_argument("--change-kwh", type=float, default=1.0,
+                   help="a day counts as weather change if its energy differs from the day before "
+                        "by more than this (kWh/m², default 1.0)")
     p.add_argument("--out", default=os.path.join(here, "validation_openmeteo"))
     a = p.parse_args()
 
@@ -284,6 +297,47 @@ def main():
     series["same as yesterday"] = yday
     day = cs > 50                       # daytime hours (sun clearly up)
 
+    # ---- bias correction: the models are systematically too dark. One scale factor per
+    #      model and lead time, always learned on the OTHER period (fitted on 2025 → applied
+    #      to 2026 and vice versa), so the corrected scores are a fair test, not hindsight.
+    fold = np.zeros(T, int)
+    plabel = []
+    for pi, (s, e) in enumerate(periods):
+        t0 = dt.datetime.strptime(s, "%Y-%m-%d")
+        t1 = dt.datetime.strptime(e, "%Y-%m-%d") + dt.timedelta(days=1)
+        fold[np.array([t0 <= t < t1 for t in times])] = pi
+        plabel.append(f"{s} – {e}")
+    if len(periods) == 1:               # only one period: learn on one half, test on the other
+        fold = (np.arange(T) >= T // 2).astype(int)
+        plabel = ["first half", "second half"]
+    raw = [k for k in series if " | " in k]
+    fac_rows = []
+    for k in raw:
+        f = series[k]
+        out = np.full_like(f, np.nan)
+        for fo in range(int(fold.max()) + 1):
+            train = day & np.isfinite(y) & np.isfinite(f) & (fold != fo)[None, :]
+            if train.sum() < 50:
+                continue
+            fac = float(y[train].sum() / max(f[train].sum(), 1e-9))
+            test = np.broadcast_to((fold == fo)[None, :], f.shape)
+            out[test] = f[test] * fac
+            fac_rows.append(dict(forecast=k, applied_to=plabel[fo], factor=round(fac, 3),
+                                 learned_from_hours=int(train.sum())))
+        if np.isfinite(out).any():
+            series[f"{k} | corrected"] = out
+    order = (["actual"] + [x for k in raw for x in (k, f"{k} | corrected")]
+             + ["always clear sky", "same as yesterday"])
+    series = collections.OrderedDict((k, series[k]) for k in order if k in series)
+    with open(os.path.join(a.out, "bias_factors.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["forecast", "applied_to", "factor", "learned_from_hours"])
+        w.writeheader()
+        w.writerows(fac_rows)
+    if fac_rows:
+        print("\nBias correction (forecast × factor, learned on the other period):")
+        for r in fac_rows:
+            print(f"  {r['forecast']:<32} → {r['applied_to']}: × {r['factor']:.3f}")
+
     # ---- hourly data file
     with open(os.path.join(a.out, "data_hourly.csv"), "w", newline="") as f:
         w = csv.writer(f)
@@ -299,43 +353,16 @@ def main():
                            + ["" if not np.isfinite(v[i, j]) else round(float(v[i, j]), 1)
                               for v in series.values()])
 
-    # ---- hourly metrics (daytime hours where the actual value and the forecast exist;
-    #      n in the tables says how many hours that was)
-    common = day & np.isfinite(y)
-    fc_names = [k for k in series if k != "actual"]
-    rows_h = []
-    race = np.zeros(T, bool)
-    for s, e in RACE_WEEKS:
-        t0 = dt.datetime.strptime(s, "%Y-%m-%d")
-        t1 = dt.datetime.strptime(e, "%Y-%m-%d") + dt.timedelta(days=1)
-        race |= np.array([t0 <= t < t1 for t in times])
-    subsets = [("all", np.ones((n, T), bool)), ("north", north[:, None] & np.ones(T, bool)),
-               ("south", ~north[:, None] & np.ones(T, bool)), ("race week", race[None, :] & np.ones((n, 1), bool))]
-    # fair comparison: every forecast is scored on the same hours (where all of them exist)
-    all_fc = np.all([np.isfinite(series[k]) for k in fc_names], axis=0)
-    for sub, msk in subsets:
-        for k in fc_names:
-            mm = common & msk & all_fc
-            r = metrics(np.where(mm, series[k], np.nan), np.where(mm, y, np.nan))
-            if r:
-                rows_h.append(dict(subset=sub, forecast=k, **{x: round(v, 3) if isinstance(v, float) else v
-                                                              for x, v in r.items()}))
-    keys = ["subset", "forecast", "n", "mean_actual", "bias", "mae", "rmse", "rel_mae", "corr"]
-    with open(os.path.join(a.out, "metrics_hourly.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        w.writeheader()
-        w.writerows([r for r in rows_h if r["subset"] == "all"])
-    with open(os.path.join(a.out, "metrics_by_region.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        w.writeheader()
-        w.writerows([r for r in rows_h if r["subset"] != "all"])
-
-    # ---- daily energy (local day, kWh/m²), only complete days
+    # ---- local days (ACST) and daily energy (kWh/m²). Only days that lie completely inside
+    #      the fetched time range count (all 24 hours present) – the half days at the edges of
+    #      each period would otherwise show up as nonsense values of ~0.2 kWh/m².
     local_day = [(t - dt.timedelta(hours=1) + dt.timedelta(hours=LOCAL_OFFSET_H)).date() for t in times]
-    days = sorted(set(local_day))
     dpos = collections.defaultdict(list)
     for j, d in enumerate(local_day):
         dpos[d].append(j)
+    days = sorted(d for d in dpos if len(dpos[d]) == 24)
+    dindex = {d: di for di, d in enumerate(days)}
+    jd = np.array([dindex.get(d, -1) for d in local_day])
 
     def daily(v):
         out = np.full((n, len(days)), np.nan)
@@ -347,20 +374,90 @@ def main():
             out[:, di] = np.where(complete, np.nansum(np.where(need, vv, 0), axis=1) / 1000.0, np.nan)
         return out
     dy = daily(y)
-    dser = {k: daily(v) for k, v in series.items() if k != "actual"}
+    fc_names = [k for k in series if k != "actual"]
+    dser = {k: daily(series[k]) for k in fc_names}
+
+    # ---- weather-change days: the daily energy at a point differs from the day before by
+    #      more than --change-kwh. 'Same as yesterday' is wrong on exactly these days, so here
+    #      a weather model has to prove itself.
+    change = np.zeros_like(dy, bool)
+    steady = np.zeros_like(dy, bool)
+    for di in range(1, len(days)):
+        if days[di] - days[di - 1] == dt.timedelta(days=1):
+            jump = np.abs(dy[:, di] - dy[:, di - 1])
+            ok = np.isfinite(jump)
+            change[:, di] = ok & (jump > a.change_kwh)
+            steady[:, di] = ok & (jump <= a.change_kwh)
+    # fair comparison for the daily energy too: only point-days where every forecast exists
     d_all = np.all([np.isfinite(v) for v in dser.values()], axis=0) & np.isfinite(dy)
     dy = np.where(d_all, dy, np.nan)
     dser = {k: np.where(d_all, v, np.nan) for k, v in dser.items()}
+    change &= d_all
+    steady &= d_all
+    print(f"\n{len(days)} complete days; point-days with a weather change "
+          f"(> {a.change_kwh:g} kWh/m² vs. day before): {int(change.sum())} "
+          f"(north {int(change[north].sum())}, south {int(change[~north].sum())}), "
+          f"steady: {int(steady.sum())}")
+
+    def to_hours(dm):                   # (points × days) mask → (points × hours) mask
+        m = np.zeros((n, T), bool)
+        ok = jd >= 0
+        m[:, ok] = dm[:, jd[ok]]
+        return m
+
+    race = np.zeros(T, bool)
+    race_d = np.zeros(len(days), bool)
+    for s, e in RACE_WEEKS:
+        t0 = dt.datetime.strptime(s, "%Y-%m-%d")
+        t1 = dt.datetime.strptime(e, "%Y-%m-%d") + dt.timedelta(days=1)
+        race |= np.array([t0 <= t < t1 for t in times])
+        race_d |= np.array([t0.date() <= d < t1.date() for d in days], bool)
+    ones_h = np.ones((n, T), bool)
+    ones_d = np.ones((n, len(days)), bool)
+    subsets_h = [("all", ones_h), ("north", north[:, None] & ones_h), ("south", ~north[:, None] & ones_h),
+                 ("race week", race[None, :] & ones_h),
+                 ("change days", to_hours(change)), ("steady days", to_hours(steady))]
+    subsets_d = [("all", ones_d), ("north", north[:, None] & ones_d), ("south", ~north[:, None] & ones_d),
+                 ("race week", race_d[None, :] & ones_d), ("change days", change), ("steady days", steady)]
+    SUBS = [s for s, _ in subsets_h]
+
+    def rnd(r):
+        return {x: round(v, 3) if isinstance(v, float) else v for x, v in r.items()}
+
+    # ---- hourly metrics (daytime hours where the actual value and the forecast exist;
+    #      n in the tables says how many hours that was)
+    common = day & np.isfinite(y)
+    # fair comparison: every forecast is scored on the same hours (where all of them exist)
+    all_fc = np.all([np.isfinite(series[k]) for k in fc_names], axis=0)
+    rows_h = []
+    for sub, msk in subsets_h:
+        for k in fc_names:
+            mm = common & msk & all_fc
+            r = metrics(np.where(mm, series[k], np.nan), np.where(mm, y, np.nan))
+            if r:
+                rows_h.append(dict(subset=sub, forecast=k, **rnd(r)))
+    keys = ["subset", "forecast", "n", "mean_actual", "bias", "mae", "rmse", "rel_mae", "corr"]
+    with open(os.path.join(a.out, "metrics_hourly.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        w.writerows([r for r in rows_h if r["subset"] == "all"])
+    with open(os.path.join(a.out, "metrics_by_region.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        w.writerows([r for r in rows_h if r["subset"] != "all"])
+
+    # ---- daily metrics, same subsets
     rows_d = []
-    for k, v in dser.items():
-        r = metrics(v, dy)
-        if r:
-            rows_d.append(dict(forecast=k, **{x: round(val, 3) if isinstance(val, float) else val
-                                              for x, val in r.items()}))
+    for sub, msk in subsets_d:
+        for k in fc_names:
+            r = metrics(np.where(msk, dser[k], np.nan), np.where(msk, dy, np.nan))
+            if r:
+                rows_d.append(dict(subset=sub, forecast=k, **rnd(r)))
     with open(os.path.join(a.out, "metrics_daily.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys[1:])
+        w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(rows_d)
+    rows_d_all = [r for r in rows_d if r["subset"] == "all"]
 
     # ---- figures
     try:
@@ -410,21 +507,23 @@ def main():
         plt.close(fig)
 
         # errors per forecast
+        def style(bars, names):
+            for b, k in zip(bars, names):
+                if k.endswith("corrected"):
+                    b.set_hatch("///"); b.set_edgecolor("white")
         allr = [r for r in rows_h if r["subset"] == "all"]
-        fig, ax = plt.subplots(1, 2, figsize=(14, 5.5))
         names = [r["forecast"] for r in allr]
+        labels = [k.replace(" | ", ", ") for k in names]
+        colors = [mcol.get(k.split(" | ")[0], "0.5") for k in names]
+        fig, ax = plt.subplots(1, 2, figsize=(14, 0.3 * len(names) + 2))
         yv = np.arange(len(names))
-        colors = []
-        for k in names:
-            m = k.split(" | ")[0]
-            colors.append(mcol.get(m, "0.5"))
-        ax[0].barh(yv, [r["mae"] for r in allr], color=colors)
-        ax[0].set_yticks(yv, names, fontsize=8); ax[0].invert_yaxis()
+        style(ax[0].barh(yv, [r["mae"] for r in allr], color=colors), names)
+        ax[0].set_yticks(yv, labels, fontsize=8); ax[0].invert_yaxis()
         ax[0].set_xlabel("mean error per daytime hour [W/m²]  (lower = better)")
-        ax[0].set_title("Hourly error")
-        dd = {r["forecast"]: r for r in rows_d}
-        ax[1].barh(yv, [dd[k]["mae"] if k in dd else 0 for k in names], color=colors)
-        ax[1].set_yticks(yv, names, fontsize=8); ax[1].invert_yaxis()
+        ax[0].set_title("Hourly error  (hatched = bias-corrected)")
+        dd = {r["forecast"]: r for r in rows_d_all}
+        style(ax[1].barh(yv, [dd[k]["mae"] if k in dd else 0 for k in names], color=colors), names)
+        ax[1].set_yticks(yv, labels, fontsize=8); ax[1].invert_yaxis()
         ax[1].set_xlabel("mean error of the daily energy [kWh/m²]  (lower = better)")
         ax[1].set_title("Daily energy error")
         fig.suptitle("Open-Meteo forecasts vs. satellite-derived actual values (all periods, route points)")
@@ -456,7 +555,7 @@ def main():
         bins = np.arange(6, 19)
         fig, ax = plt.subplots(figsize=(10, 5))
         for k in fc_names:
-            if "|" not in k or "2 days" in k:
+            if "|" not in k or "2 days" in k or k.endswith("corrected"):
                 continue
             m, lab = k.split(" | ")
             b = []
@@ -470,6 +569,29 @@ def main():
         ax.legend(fontsize=7, ncol=2)
         fig.tight_layout()
         fig.savefig(os.path.join(a.out, "fig_hour_of_day.png"), dpi=110)
+        plt.close(fig)
+
+        # north vs south (hourly) and steady vs change days (daily energy)
+        def grouped(ax, rows, subs, scols, xlabel, title):
+            look = {(r["subset"], r["forecast"]): r["mae"] for r in rows}
+            nm = [k for k in fc_names if any((s_, k) in look for s_ in subs)]
+            yy = np.arange(len(nm))
+            h = 0.8 / len(subs)
+            for si, (s_, c_) in enumerate(zip(subs, scols)):
+                ax.barh(yy + (si - (len(subs) - 1) / 2) * h,
+                        [look.get((s_, k), np.nan) for k in nm], height=h, color=c_, label=s_)
+            ax.set_yticks(yy, [k.replace(" | ", ", ") for k in nm], fontsize=8)
+            ax.invert_yaxis()
+            ax.set_xlabel(xlabel); ax.set_title(title); ax.legend(fontsize=8)
+            ax.grid(axis="x", alpha=0.3)
+        fig, ax = plt.subplots(1, 2, figsize=(15, 0.3 * len(fc_names) + 2.5))
+        grouped(ax[0], rows_h, ["north", "south"], ["#E69F00", "#0072B2"],
+                "mean error per daytime hour [W/m²]", "Hourly error: north vs. south of 23.4°S")
+        grouped(ax[1], rows_d, ["steady days", "change days"], ["0.6", "#D55E00"],
+                "mean error of the daily energy [kWh/m²]",
+                f"Daily energy: steady vs. change days (jump > {a.change_kwh:g} kWh/m²)")
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, "fig_regions_changes.png"), dpi=110)
         plt.close(fig)
     except ImportError:
         print("matplotlib not installed – no figures")
@@ -491,20 +613,33 @@ def main():
           "## Hourly values",
           table([r for r in rows_h if r["subset"] == "all"], "W/m²"),
           "",
-          "## Daily energy",
-          table(rows_d, "kWh/m²", 1.0, 2),
-          "",
-          "## North / south / race week (hourly, mean error W/m²)",
-          "| Forecast | north | south | race week |", "|---|---|---|---|"]
-    by = collections.defaultdict(dict)
-    for r in rows_h:
-        by[r["forecast"]][r["subset"]] = r["mae"]
-    for k in fc_names:
-        if k in by:
-            md.append(f"| {k.replace(' | ', ', ')} | " + " | ".join(f"{by[k].get(s, float('nan')):.0f}"
-                                                for s in ("north", "south", "race week")) + " |")
-    md += ["", "Bias > 0: forecast too sunny. 'always clear sky' and 'same as yesterday' are the "
-           "references a forecast has to beat."]
+          "## Daily energy (complete days only)",
+          table(rows_d_all, "kWh/m²", 1.0, 2),
+          ""]
+
+    def split_table(rows, title, fmt):
+        by = collections.defaultdict(dict)
+        for r in rows:
+            by[r["forecast"]][r["subset"]] = r["mae"]
+        out = [title, "| Forecast | " + " | ".join(SUBS[1:]) + " |", "|---" * len(SUBS) + "|"]
+        for k in fc_names:
+            if k in by:
+                out.append(f"| {k.replace(' | ', ', ')} | " + " | ".join(
+                    fmt.format(by[k][s_]) if s_ in by[k] else "–" for s_ in SUBS[1:]) + " |")
+        return out
+    md += split_table(rows_h, "## Mean error per subset – hourly [W/m²]", "{:.0f}") + [""]
+    md += split_table(rows_d, "## Mean error per subset – daily energy [kWh/m²]", "{:.2f}") + [""]
+    md += [f"Change days: daily energy differs by more than {a.change_kwh:g} kWh/m² from the day "
+           f"before at that point ({int(change.sum())} point-days; steady: {int(steady.sum())}).", ""]
+    if fac_rows:
+        md += ["## Bias correction factors (forecast × factor; learned on the other period)",
+               "| Forecast | applied to | factor |", "|---|---|---|"]
+        md += [f"| {r['forecast'].replace(' | ', ', ')} | {r['applied_to']} | {r['factor']:.3f} |"
+               for r in fac_rows]
+        md.append("")
+    md += ["Bias > 0: forecast too sunny. 'always clear sky' and 'same as yesterday' are the "
+           "references a forecast has to beat. 'corrected' = forecast multiplied by a factor "
+           "learned on the other period (fair test)."]
     open(os.path.join(a.out, "summary.md"), "w", encoding="utf-8").write("\n".join(md))
     print("\n" + "\n".join(md))
     print(f"\n→ results in {a.out}/")
