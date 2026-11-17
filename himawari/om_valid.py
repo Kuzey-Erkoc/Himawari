@@ -363,6 +363,14 @@ def main():
         if cov < MIN_COVERAGE:
             print(f"  ({k}: values for only {100 * cov:.0f} % of the daytime hours – left out)")
             del series[k]
+    # implausible values (e.g. a broken archive: far more or less sunshine than the satellite
+    # saw on average) would spoil every table: leave such a forecast out
+    for k in [k for k in series if " | " in k]:
+        ok = base_h & np.isfinite(series[k])
+        ratio = float(series[k][ok].sum() / max(y[ok].sum(), 1e-9)) if ok.any() else np.nan
+        if not 0.6 <= ratio <= 1.5:
+            print(f"  ({k}: implausible values – on average {ratio:.2f} × the satellite value – left out)")
+            del series[k]
     models = [m for m in models if any(k.startswith(f"{m} | ") for k in series)]
 
     # ---- bias correction: the models are systematically too dark. One scale factor per
@@ -444,13 +452,24 @@ def main():
     jd = np.array([dindex.get(d, -1) for d in local_day])
 
     def daily(v):
+        """Daily energy (kWh/m²) over the daytime hours (clear sky > 50 W/m²). Up to 2 missing
+        hours per point and day are filled with the day's mean clear-sky index – single gaps
+        at sunrise/sunset in one model would otherwise throw the whole day away."""
         out = np.full((n, len(days)), np.nan)
         for di, d in enumerate(days):
             js = dpos[d]
-            need = cs[:, js] > 1
+            c = cs[:, js]
+            need = c > 50
             vv = v[:, js]
-            complete = np.all(np.isfinite(vv) | ~need, axis=1) & need.any(axis=1)
-            out[:, di] = np.where(complete, np.nansum(np.where(need, vv, 0), axis=1) / 1000.0, np.nan)
+            have = need & np.isfinite(vv)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                kmean = np.where(have.any(axis=1),
+                                 np.nansum(np.where(have, vv, 0), axis=1)
+                                 / np.maximum(np.sum(np.where(have, c, 0), axis=1), 1e-9), np.nan)
+            miss = (need & ~np.isfinite(vv)).sum(axis=1)
+            filled = np.where(need & ~np.isfinite(vv), c * kmean[:, None], vv)
+            complete = (miss <= 2) & have.any(axis=1) & np.isfinite(kmean)
+            out[:, di] = np.where(complete, np.sum(np.where(need, filled, 0), axis=1) / 1000.0, np.nan)
         return out
     dy = daily(y)
     fc_names = [k for k in series if k != "actual"]
@@ -468,12 +487,23 @@ def main():
             change[:, di] = ok & (jump > a.change_kwh)
             steady[:, di] = ok & (jump <= a.change_kwh)
     # fair comparison for the daily energy too: only point-days where every forecast exists
-    d_all = np.all([np.isfinite(v) for v in dser.values()], axis=0) & np.isfinite(dy)
+    # a forecast that has a daily value for fewer than 80 % of the point-days is left out of the
+    # daily comparison (instead of throwing those days away for all others)
+    base_d = np.isfinite(dy)
+    for k in list(dser):
+        cov = float(np.isfinite(dser[k])[base_d].mean()) if base_d.any() else 0.0
+        if cov < 0.8:
+            print(f"  ({k}: daily energy for only {100 * cov:.0f} % of the point-days – "
+                  f"left out of the daily comparison)")
+            dser[k] = np.full_like(dy, np.nan)
+    kept_d = [v for v in dser.values() if np.isfinite(v).any()]
+    d_all = (np.all([np.isfinite(v) for v in kept_d], axis=0) if kept_d else base_d) & base_d
     dy = np.where(d_all, dy, np.nan)
     dser = {k: np.where(d_all, v, np.nan) for k, v in dser.items()}
     change &= d_all
     steady &= d_all
-    print(f"\n{len(days)} complete days; point-days with a weather change "
+    print(f"\n{len(days)} days, {int(d_all.sum())} point-days with a daily value for every forecast; "
+          f"point-days with a weather change "
           f"(> {a.change_kwh:g} kWh/m² vs. day before): {int(change.sum())} "
           f"(north {int(change[north].sum())}, south {int(change[~north].sum())}), "
           f"steady: {int(steady.sum())}")
