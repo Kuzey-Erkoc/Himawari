@@ -6,7 +6,7 @@ For a period (default: the race week 22–29 Aug 2026, local dates) the script f
 every point of route_locations.py (--every N: every N-th point):
 
   forecasts   hourly global irradiance (GHI, W/m²) of several weather models via Open-Meteo
-              (ECMWF, GFS, ICON, the Australian ACCESS-G, JMA …)
+              (ECMWF, GFS, the Australian ACCESS-G, JMA …; ICON etc. with --models)
                 * "short lead": Historical Forecast API – the newest forecast for each hour,
                   made a few hours before
                 * "1 day ahead" / "2 days ahead": Previous Runs API – what the model said
@@ -48,7 +48,7 @@ learned on the other period (fair test). Weather-change days: days whose daily e
 more than 1 kWh/m² from the day before (--change-kwh).
 
 Open-Meteo's free use allows about 600 location-requests per minute and 10 000 per day; all 150
-points × 6 models need roughly 2 000. When the minute limit is hit the script waits and goes on.
+points × 5 models need roughly 1 700. When the minute limit is hit the script waits and goes on.
 
 Usage:
     pip install numpy requests matplotlib
@@ -76,9 +76,9 @@ HIST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 PREV_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 SAT_URL = "https://satellite-api.open-meteo.com/v1/archive"
 # weather models (Open-Meteo names). A model Open-Meteo has no archive for is left out with a note.
-# (UK Met Office and Météo-France were left out after the race-week-2026 check: worse than the
-# simple references and false cloud alarms; add them with --models if wanted)
-DEFAULT_MODELS = "best_match,ecmwf_ifs025,gfs_global,icon_global,bom_access_global,jma_gsm"
+# (UK Met Office, Météo-France and ICON were left out after the race-week-2026 check: worse
+# than ECMWF/GFS, false cloud alarms; add them with --models if wanted)
+DEFAULT_MODELS = "best_match,ecmwf_ifs025,gfs_global,bom_access_global,jma_gsm"
 DEFAULT_PERIODS = [("2026-08-22", "2026-08-29")]       # race week 2026, local dates (ACST)
 # fixed bias-correction factors – the same as in main.py / trip_forecast.py (from the 2025+2026
 # seasons and the car's weather station). Used when only one period is analysed.
@@ -624,6 +624,14 @@ def main():
                "#17becf", "#bcbd22"]                      # no grey: grey = references
         mcol = {m: pal[i % len(pal)] for i, m in enumerate(models)}
         lstyle = {"short lead": "-", "1 day ahead": "--", "2 days ahead": ":"}
+
+        def shown(m, lab):
+            """The series a plot shows for model m: bias-corrected if there is a factor."""
+            k = f"{m} | {lab} | corrected"
+            if k in series:
+                return k, f"{m} × {BIAS_FACTOR.get(m, 0):.2f}" if not cross else f"{m}, corrected"
+            k = f"{m} | {lab}"
+            return (k, m) if k in series else (None, None)
         loc = lambda tt: [t + dt.timedelta(hours=LOCAL_OFFSET_H) - dt.timedelta(minutes=30) for t in tt]
 
         def mark_towns(ax, labels=True):
@@ -647,15 +655,14 @@ def main():
                 tt = loc([times[j] for j in js])
                 ax.fill_between(tt, cs[i, js], color="0.9", label="clear sky")
                 ax.plot(tt, y[i, js], color="k", lw=1.6, label="actual (satellite)")
-                for lab in ("short lead", "1 day ahead"):
-                    k = f"{best} | {lab}"
-                    if k in series:
-                        ax.plot(tt, series[k][i, js], lstyle[lab], color=mcol[best], lw=1.1,
-                                label=f"{best}, {lab}")
-                k = f"{best} | 1 day ahead | corrected"
-                if k in series:
-                    ax.plot(tt, series[k][i, js], "--", color="#7a3b00", lw=1.0,
-                            label=f"{best}, 1 day ahead, corrected")
+                for m in models:
+                    if m not in (best, "gfs_global"):
+                        continue
+                    for lab in (("short lead", "1 day ahead") if m == best else ("1 day ahead",)):
+                        k, name = shown(m, lab)
+                        if k:
+                            ax.plot(tt, series[k][i, js], lstyle[lab], color=mcol[m], lw=1.1,
+                                    label=f"{name}, {lab}")
                 ax.set_title(f"{pname} ({pts[i][2]}, km {pkm[i]:.0f})", fontsize=10)
                 ax.set_ylabel("GHI [W/m²]")
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
@@ -677,7 +684,8 @@ def main():
         lead_r = a.day_lead
         fig, axs = plt.subplots(3, 1, figsize=(13, 11), sharex=True)
         refs = [("always clear sky", "0.55", ":"), ("same as yesterday", "0.35", "-.")]
-        lines = [(f"{m} | {lead_r}", mcol[m], "-", m) for m in models if f"{m} | {lead_r}" in series]
+        lines = [(shown(m, lead_r)[0], mcol[m], "-", shown(m, lead_r)[1]) for m in models
+                 if shown(m, lead_r)[0]]
         lines += [(k, c_, ls, k) for k, c_, ls in refs if k in series]
         for k, c_, ls, lab in lines:
             e = np.where(hmask, series[k] - y, np.nan)
@@ -699,8 +707,8 @@ def main():
             mark_towns(ax, labels=ax_i == 0)
             ax.grid(alpha=0.3)
         axs[0].legend(fontsize=7, ncol=4, loc="upper left")
-        fig.suptitle(f"Forecast error along the route – forecasts {lead_r}, raw values "
-                     f"(smoothed over 5 points)", y=0.995)
+        fig.suptitle(f"Forecast error along the route – forecasts {lead_r}, bias-corrected where a "
+                     f"factor exists (smoothed over 5 points)", y=0.995)
         fig.tight_layout()
         fig.savefig(os.path.join(a.out, "fig_along_route.png"), dpi=110)
         plt.close(fig)
@@ -715,14 +723,15 @@ def main():
             for di, d in enumerate(days):
                 ax = axs[di // ncol, di % ncol]
                 ax.plot(pkm, dser["always clear sky"][:, di], ":", color="0.55", lw=1, label="clear sky")
+                k = f"{best} | {lead_r}"
+                if k in dser and f"{k} | corrected" in dser:      # raw ECMWF, to see the correction
+                    ax.plot(pkm, dser[k][:, di], ":", color=mcol[best], lw=1.0,
+                            label=f"{best} (raw, without factor)")
                 for m in models:
-                    k = f"{m} | {lead_r}"
-                    if k in dser:
-                        ax.plot(pkm, dser[k][:, di], color=mcol[m], lw=2.0 if m == best else 0.9,
-                                alpha=1 if m == best else 0.8, label=m)
-                k = f"{best} | {lead_r} | corrected"
-                if k in dser:
-                    ax.plot(pkm, dser[k][:, di], "--", color="#7a3b00", lw=1.2, label=f"{best}, corrected")
+                    k, name = shown(m, lead_r)
+                    if k and k in dser:
+                        ax.plot(pkm, dser[k][:, di], color=mcol[m], lw=2.0 if m == best else 1.1,
+                                alpha=1 if m == best else 0.85, label=name)
                 ax.plot(pkm, dy[:, di], color="k", lw=2.2, label="actual (satellite)")
                 ax.text(0.99, 0.04, f"{d:%a %d.%m.%Y}", transform=ax.transAxes, ha="right",
                         va="bottom", fontsize=10, fontweight="bold",
@@ -771,16 +780,17 @@ def main():
         fig, axs = plt.subplots(1, 3, figsize=(15, 5), sharex=True, sharey=True)
         for ax, lab in zip(axs, ("short lead", "1 day ahead", "2 days ahead")):
             for m in models:
-                k = f"{m} | {lab}"
-                if k in dser:
-                    ax.scatter(dy.ravel(), dser[k].ravel(), s=8, alpha=0.5, color=mcol[m], label=m)
+                k, name = shown(m, lab)
+                if k and k in dser:
+                    ax.scatter(dy.ravel(), dser[k].ravel(), s=8, alpha=0.5, color=mcol[m], label=name)
             lim = np.nanmax(dy) * 1.1 if np.isfinite(dy).any() else 10
             ax.plot([0, lim], [0, lim], "k-", lw=0.8)
             ax.set_xlabel("actual daily energy [kWh/m²]")
             ax.set_title(lab)
         axs[0].set_ylabel("forecast daily energy [kWh/m²]")
         axs[0].legend(fontsize=8)
-        fig.suptitle("Daily energy per route point and day (on the line = perfect)")
+        fig.suptitle("Daily energy per route point and day, bias-corrected where a factor exists "
+                     "(on the line = perfect)")
         fig.tight_layout()
         fig.savefig(os.path.join(a.out, "fig_daily_energy.png"), dpi=110)
         plt.close(fig)
@@ -790,15 +800,16 @@ def main():
                        for t in times])
         bins = np.arange(6, 19)
         fig, ax = plt.subplots(figsize=(10, 5))
-        for k in fc_names:
-            if "|" not in k or not k.endswith("short lead"):
+        for m in models:
+            lab = "short lead"
+            k, name = shown(m, lab)
+            if not k:
                 continue
-            m, lab = k.split(" | ")
             b = []
             for h0 in bins:
                 msk = common & ((lh >= h0) & (lh < h0 + 1))[None, :] & np.isfinite(series[k])
                 b.append(np.nanmean((series[k] - y)[msk]) if msk.any() else np.nan)
-            ax.plot(bins + 0.5, b, lstyle[lab], color=mcol[m], marker="o", ms=3, label=k)
+            ax.plot(bins + 0.5, b, lstyle[lab], color=mcol[m], marker="o", ms=3, label=name)
         ax.axhline(0, color="k", lw=0.8)
         ax.set_xlabel("local time (ACST)"); ax.set_ylabel("bias forecast − actual [W/m²]")
         ax.set_title("Systematic error by time of day, newest forecasts (above 0 = too sunny)")
