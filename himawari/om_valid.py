@@ -6,7 +6,7 @@ For a period (default: the race week 22–29 Aug 2026, local dates) the script f
 every point of route_locations.py (--every N: every N-th point):
 
   forecasts   hourly global irradiance (GHI, W/m²) of several weather models via Open-Meteo
-              (ECMWF, GFS, ICON, the Australian ACCESS-G, JMA, UK Met Office, Météo-France …)
+              (ECMWF, GFS, ICON, the Australian ACCESS-G, JMA …)
                 * "short lead": Historical Forecast API – the newest forecast for each hour,
                   made a few hours before
                 * "1 day ahead" / "2 days ahead": Previous Runs API – what the model said
@@ -48,7 +48,7 @@ learned on the other period (fair test). Weather-change days: days whose daily e
 more than 1 kWh/m² from the day before (--change-kwh).
 
 Open-Meteo's free use allows about 600 location-requests per minute and 10 000 per day; all 150
-points × 8 models need roughly 2 500. When the minute limit is hit the script waits and goes on.
+points × 6 models need roughly 2 000. When the minute limit is hit the script waits and goes on.
 
 Usage:
     pip install numpy requests matplotlib
@@ -76,8 +76,9 @@ HIST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 PREV_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 SAT_URL = "https://satellite-api.open-meteo.com/v1/archive"
 # weather models (Open-Meteo names). A model Open-Meteo has no archive for is left out with a note.
-DEFAULT_MODELS = ("best_match,ecmwf_ifs025,gfs_global,icon_global,bom_access_global,jma_gsm,"
-                  "ukmo_global_deterministic_10km,meteofrance_arpege_world")
+# (UK Met Office and Météo-France were left out after the race-week-2026 check: worse than the
+# simple references and false cloud alarms; add them with --models if wanted)
+DEFAULT_MODELS = "best_match,ecmwf_ifs025,gfs_global,icon_global,bom_access_global,jma_gsm"
 DEFAULT_PERIODS = [("2026-08-22", "2026-08-29")]       # race week 2026, local dates (ACST)
 # fixed bias-correction factors – the same as in main.py / trip_forecast.py (from the 2025+2026
 # seasons and the car's weather station). Used when only one period is analysed.
