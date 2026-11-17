@@ -1,0 +1,27 @@
+subset,forecast,n,mean_actual,bias,mae,rmse,rel_mae,corr
+all,best_match | short lead,11715,564.534,-35.486,57.181,78.814,0.101,0.96
+all,best_match | short lead | corrected,11715,564.534,-3.743,40.156,72.61,0.071,0.96
+all,best_match | 1 day ahead,11715,564.534,-37.817,62.488,90.123,0.111,0.945
+all,best_match | 1 day ahead | corrected,11715,564.534,-6.214,46.478,84.787,0.082,0.945
+all,best_match | 2 days ahead,11715,564.534,-30.881,61.069,88.037,0.108,0.944
+all,best_match | 2 days ahead | corrected,11715,564.534,1.139,46.302,84.888,0.082,0.944
+all,ecmwf_ifs025 | short lead,11715,564.534,-38.09,56.775,73.864,0.101,0.968
+all,ecmwf_ifs025 | short lead | corrected,11715,564.534,-6.503,38.25,64.025,0.068,0.968
+all,ecmwf_ifs025 | 1 day ahead,11715,564.534,-39.51,61.715,84.626,0.109,0.954
+all,ecmwf_ifs025 | 1 day ahead | corrected,11715,564.534,-8.009,43.966,76.578,0.078,0.954
+all,ecmwf_ifs025 | 2 days ahead,11715,564.534,-33.338,62.138,86.871,0.11,0.947
+all,ecmwf_ifs025 | 2 days ahead | corrected,11715,564.534,-1.467,45.332,81.38,0.08,0.947
+all,gfs_global | short lead,11715,564.534,-26.669,60.886,94.587,0.108,0.937
+all,gfs_global | short lead | corrected,11715,564.534,-10.533,51.97,93.772,0.092,0.937
+all,gfs_global | 1 day ahead,11715,564.534,-22.659,62.245,97.693,0.11,0.93
+all,gfs_global | 1 day ahead | corrected,11715,564.534,-6.402,53.728,97.448,0.095,0.93
+all,gfs_global | 2 days ahead,11715,564.534,-23.811,64.81,103.009,0.115,0.922
+all,gfs_global | 2 days ahead | corrected,11715,564.534,-7.589,56.46,102.858,0.1,0.922
+all,icon_global | short lead,11715,564.534,-65.347,79.1,96.772,0.14,0.958
+all,icon_global | short lead | corrected,11715,564.534,-20.42,50.396,77.444,0.089,0.958
+all,icon_global | 1 day ahead,11715,564.534,-64.091,80.027,104.359,0.142,0.945
+all,icon_global | 1 day ahead | corrected,11715,564.534,-19.051,53.406,89.349,0.095,0.945
+all,icon_global | 2 days ahead,11715,564.534,-63.198,82.023,105.487,0.145,0.941
+all,icon_global | 2 days ahead | corrected,11715,564.534,-18.077,55.884,90.582,0.099,0.941
+all,always clear sky,11715,564.534,24.963,69.422,124.226,0.123,0.873
+all,same as yesterday,11715,564.534,-16.338,75.913,143.743,0.134,0.838
