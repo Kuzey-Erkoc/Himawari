@@ -143,7 +143,10 @@ NORTH_LAT = -23.44         # Tropic of Capricorn: route split into 'north' (trop
 OM_FC_URL = "https://api.open-meteo.com/v1/forecast"                 # weather-model forecasts
 OM_PREV_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"  # forecasts made 24 h ago
 NWP_MODELS = ("best_match", "ecmwf_ifs025", "gfs_global", "icon_global")   # columns in history
-NWP_DEFAULT = "ecmwf_ifs025,gfs_global,best_match"     # the first one is used in the blend
+# ECMWF (main model, used in the blend) and GFS as second opinion. best_match is left out: in
+# Australia it was practically identical to ECMWF; ICON produced false cloud alarms in the
+# race-week-2026 check (om_valid.py). Both can be added with --nwp-models.
+NWP_DEFAULT = "ecmwf_ifs025,gfs_global"
 # Bias correction: all models forecast systematically too little sunshine. Factor per model,
 # from om_valid.py (Aug 2025+2026 vs. satellite, learned on the other year) and checked against
 # the car's own weather station in the WSC 2025 (validate_car.py; the satellite reads ~3 %
@@ -1932,7 +1935,7 @@ def main():
     p.add_argument("--speed", type=float, default=80.0, help="car speed for --car-km, km/h")
     p.add_argument("--nwp-models", default=NWP_DEFAULT,
                    help="weather models from Open-Meteo to compare with, comma-separated "
-                        f"(default {NWP_DEFAULT}; also icon_global; '' = none)")
+                        f"(default {NWP_DEFAULT}; also best_match, icon_global; '' = none)")
     p.add_argument("--nwp-source", choices=["forecast", "previous_day1"], default="forecast",
                    help="'forecast' = latest model runs (for the past: first hours of each run); "
                         "'previous_day1' = what the models predicted 24 h earlier")

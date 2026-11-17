@@ -15,8 +15,8 @@ Times are local race time (ACST = UTC+9:30, valid for NT and SA in August) unles
 At most the next 5 days are calculated (--max-days): further ahead the forecasts are too
 unreliable. If the finish is not reached by then, the trip ends where the car is.
 
-Default model: ECMWF (best in the validation, om_valid.py). All models forecast too little
-sunshine; their values are multiplied by a factor per model (BIAS_FACTOR, ECMWF × 1.06,
+Default models: ECMWF (best in the validation, om_valid.py) and GFS as second opinion.
+All models forecast too little sunshine; their values are multiplied by a factor per model (BIAS_FACTOR, ECMWF × 1.06,
 checked against the car's weather station), off with --no-bias-correction.
 
 Output (folder trip_forecast/):
@@ -29,7 +29,7 @@ Usage:
     python trip_forecast.py --start "2027-08-22 08:30" --speed 80
     python trip_forecast.py --start now --speed 85 --start-km 850       # car is at km 850 now
     python trip_forecast.py --start "2025-08-24 08:00" --speed 80       # replay with actual values
-    python trip_forecast.py --start now --speed 80 --models ecmwf_ifs025,gfs_global,icon_global
+    python trip_forecast.py --start now --speed 80 --models ecmwf_ifs025      # ECMWF only
     python trip_forecast.py --start now --speed 80 --no-bias-correction   # raw model values
     python trip_forecast.py --start now --speed 80 --panel-area 4 --efficiency 0.24   # + kWh for the car
     python trip_forecast.py --start now --speed 80 --no-driving-window  # drive non-stop
@@ -399,9 +399,10 @@ def main():
     p.add_argument("--drive-from", default="08:00", help="daily driving window start, local")
     p.add_argument("--drive-until", default="17:00", help="daily driving window end, local")
     p.add_argument("--no-driving-window", action="store_true", help="drive day and night")
-    p.add_argument("--models", default="ecmwf_ifs025",
-                   help="Open-Meteo models, comma-separated (default ecmwf_ifs025 – the best one in "
-                        "the validation; also gfs_global, icon_global, best_match)")
+    p.add_argument("--models", default="ecmwf_ifs025,gfs_global",
+                   help="Open-Meteo models, comma-separated; the first is the main forecast "
+                        "(default ecmwf_ifs025,gfs_global: ECMWF, GFS as second opinion; also "
+                        "icon_global, best_match)")
     p.add_argument("--no-bias-correction", action="store_true",
                    help="use the model values as they come (default: multiply by BIAS_FACTOR, "
                         "e.g. ECMWF × 1.06)")
