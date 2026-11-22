@@ -8,7 +8,7 @@ every point of route_locations.py (--every N: every N-th point):
   forecasts   hourly global irradiance (GHI, W/m²) of the weather models via Open-Meteo
               (default ECMWF and GFS; others with --models)
                 * "short lead": the newest forecast for each hour, made a few hours before
-                * "1 day ahead" / "2 days ahead": what the model said 24 h / 48 h before
+                * "1 day ahead" … "5 days ahead": what the model said 1 … 5 days before
   actual      hourly GHI derived from the Himawari satellite (Open-Meteo Satellite Radiation
               API) – a satellite estimate, not a ground measurement
 
@@ -20,8 +20,9 @@ GFS × 1.03; off with --no-bias-correction).
 Output (folder validation_openmeteo_<start date>/):
   data_hourly.csv      all hourly values per route point (time UTC and local ACST, clear sky,
                        actual, every forecast) – daytime hours only
-  fig_timeseries.png   actual vs. forecast hour by hour at Darwin, Alice Springs, Coober Pedy
-                       and Adelaide
+  fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_5days.png
+                       one figure per lead time: actual vs. forecast hour by hour at Darwin,
+                       Alice Springs, Coober Pedy and Adelaide
 
 Open-Meteo gives hourly values as the average over the hour before the time stamp; that is how
 the data come and not something this script computes.
@@ -53,6 +54,8 @@ SAT_URL = "https://satellite-api.open-meteo.com/v1/archive"
 # (UK Met Office, Météo-France and ICON were left out after the race-week-2026 check: worse
 # than ECMWF/GFS, false cloud alarms; add them with --models if wanted)
 DEFAULT_MODELS = "ecmwf_ifs025,gfs_global"
+MAX_LEAD_DAYS = 5           # forecasts from 1 … 5 days before (Open-Meteo Previous Runs API)
+LEADS = [(0, "short lead")] + [(d, f"{d} day{'s' if d > 1 else ''} ahead") for d in range(1, MAX_LEAD_DAYS + 1)]
 DEFAULT_PERIODS = [("2026-08-22", "2026-08-29")]       # race week 2026, local dates (ACST)
 # fixed bias-correction factors – the same as in main.py / trip_forecast.py (from the 2025+2026
 # seasons and the car's weather station).
@@ -275,10 +278,10 @@ def main():
             key = f"{m} | short lead"
             arr = to_grid(h, "shortwave_radiation", times, n)
             series[key] = np.where(np.isfinite(series[key]), series[key], arr) if key in series else arr
-            print(f"  {m}: 1 and 2 days ahead …")
-            vars_ = "shortwave_radiation_previous_day1,shortwave_radiation_previous_day2"
+            print(f"  {m}: 1 to {MAX_LEAD_DAYS} days ahead …")
+            vars_ = ",".join(f"shortwave_radiation_previous_day{d}" for d in range(1, MAX_LEAD_DAYS + 1))
             pr = fetch(PREV_URL, pts, dict(base, hourly=vars_, models=m), f"{m} previous runs")
-            for d, lab in ((1, "1 day ahead"), (2, "2 days ahead")):
+            for d, lab in LEADS[1:]:
                 key = f"{m} | {lab}"
                 arr = to_grid(pr, f"shortwave_radiation_previous_day{d}", times, n)
                 series[key] = np.where(np.isfinite(series[key]), series[key], arr) if key in series else arr
@@ -362,7 +365,6 @@ def main():
         mcol = {m: pal[i % len(pal)] for i, m in enumerate(models)}
         mcol.update({"ecmwf_ifs025": "#ff7f0e", "gfs_global": "#2ca02c", "icon_global": "#d62728",
                      "best_match": "#1f77b4"})           # same colours as before
-        lstyle = {"short lead": "-", "1 day ahead": "--", "2 days ahead": ":"}
 
         def shown(m, lab):
             """The series the plot shows for model m: corrected if there is a factor."""
@@ -373,42 +375,47 @@ def main():
             return (k, m) if k in series else (None, None)
         loc = lambda tt: [t + dt.timedelta(hours=LOCAL_OFFSET_H) - dt.timedelta(minutes=30) for t in tt]
 
-        # time series at four places (local time; middle of each hour)
+        # one figure per lead time: hour by hour at four places (local time; middle of each hour)
         places = [("Darwin", -12.46, 130.84), ("Alice Springs", -23.70, 133.88),
                   ("Coober Pedy", -29.01, 134.76), ("Adelaide", -34.93, 138.60)]
-        best = "ecmwf_ifs025" if "ecmwf_ifs025" in models else models[0]
         nper = len(periods)
-        fig, axs = plt.subplots(len(places), nper, figsize=(8 * nper, 2.6 * len(places)), squeeze=False)
-        for r_i, (pname, pla, plo) in enumerate(places):
-            i = int(np.argmin(haversine_km(lat, lon, pla, plo)))
-            for c_i, (d0, d1) in enumerate(pdates):
-                ax = axs[r_i, c_i]
-                js = [j for j, t in enumerate(times) if d0 <= local_date(t) <= d1]
-                tt = loc([times[j] for j in js])
-                ax.fill_between(tt, cs[i, js], color="0.9", label="clear sky")
-                ax.plot(tt, y[i, js], color="k", lw=1.6, label="actual (satellite)")
-                for m in models:
-                    if m not in (best, "gfs_global"):
-                        continue
-                    for lab in (("short lead", "1 day ahead") if m == best else ("1 day ahead",)):
+        saved = []
+        for d, lab in LEADS:
+            if not any(shown(m, lab)[0] for m in models):
+                print(f"  (no forecasts '{lab}' – no figure)")
+                continue
+            fig, axs = plt.subplots(len(places), nper, figsize=(8 * nper, 2.6 * len(places)), squeeze=False)
+            for r_i, (pname, pla, plo) in enumerate(places):
+                i = int(np.argmin(haversine_km(lat, lon, pla, plo)))
+                for c_i, (d0, d1) in enumerate(pdates):
+                    ax = axs[r_i, c_i]
+                    js = [j for j, t in enumerate(times) if d0 <= local_date(t) <= d1]
+                    tt = loc([times[j] for j in js])
+                    ax.fill_between(tt, cs[i, js], color="0.9", label="clear sky")
+                    ax.plot(tt, y[i, js], color="k", lw=1.6, label="actual (satellite)")
+                    for m in models:
                         k, name = shown(m, lab)
                         if k:
-                            ax.plot(tt, series[k][i, js], lstyle[lab], color=mcol[m], lw=1.1,
-                                    label=f"{name}, {lab}")
-                ax.set_title(f"{pname} ({pts[i][2]}, km {pkm[i]:.0f})", fontsize=10)
-                ax.set_ylabel("GHI [W/m²]")
-                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
-                if r_i == 0 and c_i == 0:
-                    ax.legend(fontsize=7, loc="upper right", ncol=2)
-        fig.suptitle("Sunshine at four places: actual (satellite) vs. forecast (local time ACST)")
-        fig.tight_layout()
-        fig.savefig(os.path.join(a.out, "fig_timeseries.png"), dpi=110)
-        plt.close(fig)
+                            ax.plot(tt, series[k][i, js], color=mcol[m], lw=1.2, label=name)
+                    ax.set_title(f"{pname} ({pts[i][2]}, km {pkm[i]:.0f})", fontsize=10)
+                    ax.set_ylabel("GHI [W/m²]")
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
+                    if r_i == 0 and c_i == 0:
+                        ax.legend(fontsize=7, loc="upper right", ncol=2)
+            when = "newest forecast (a few hours before)" if d == 0 else \
+                f"forecast made {d} day{'s' if d > 1 else ''} before"
+            fig.suptitle(f"Sunshine at four places: actual (satellite) vs. {when} – local time ACST")
+            fig.tight_layout()
+            name = "fig_timeseries_short_lead.png" if d == 0 else f"fig_timeseries_{d}day{'s' if d > 1 else ''}.png"
+            fig.savefig(os.path.join(a.out, name), dpi=110)
+            plt.close(fig)
+            saved.append(name)
 
     except ImportError:
         print("matplotlib not installed – no figure (pip install matplotlib)")
 
-    print(f"\n→ results in {a.out}/: data_hourly.csv, fig_timeseries.png")
+    print(f"\n→ results in {a.out}/: data_hourly.csv and one figure per lead time "
+          f"(fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_{MAX_LEAD_DAYS}days.png)")
 
 
 if __name__ == "__main__":
