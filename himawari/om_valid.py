@@ -12,7 +12,10 @@ every point of route_locations.py (--every N: every N-th point):
   actual      hourly GHI derived from the Himawari satellite (Open-Meteo Satellite Radiation
               API) – a satellite estimate, not a ground measurement
 
-No averages or error statistics are computed: the script only shows the values themselves.
+No averages are computed. Besides the values themselves the script counts cloud events: an
+hour is cloudy if less than 60 % of the clear-sky sunshine arrives, a day if its energy is below
+80 % of a clear day. For every forecast it counts how many cloudy hours/days it caught (hit),
+missed, and how often it forecast clouds that did not come (false alarm).
 The models forecast systematically too little sunshine, so each forecast is also written
 multiplied by the fixed factor of main.py / trip_forecast.py ("… | corrected", ECMWF × 1.06,
 GFS × 1.03; off with --no-bias-correction).
@@ -20,6 +23,9 @@ GFS × 1.03; off with --no-bias-correction).
 Output (folder validation_openmeteo_<start date>/):
   data_hourly.csv      all hourly values per route point (time UTC and local ACST, clear sky,
                        actual, every forecast) – daytime hours only
+  cloud_events.csv     counts per model and lead time: cloud hours/days that were forecast (hit),
+                       missed, false alarms – hourly, hourly with ±1 h tolerance, and per day
+  fig_cloud_events.png the same for ECMWF as bar chart (counts, no averages)
   fig_timeseries.png   ECMWF × 1.06 only: newest forecast, 1 day and 2 days before in one figure,
                        actual vs. forecast hour by hour at the four places
   fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_5days.png
@@ -56,6 +62,8 @@ SAT_URL = "https://satellite-api.open-meteo.com/v1/archive"
 # (UK Met Office, Météo-France and ICON were left out after the race-week-2026 check: worse
 # than ECMWF/GFS, false cloud alarms; add them with --models if wanted)
 DEFAULT_MODELS = "ecmwf_ifs025,gfs_global"
+CLOUDY_HOUR = 0.6          # an hour is "cloudy" if less than 60 % of the clear-sky sunshine arrives
+CLOUDY_DAY = 0.8           # a day is "cloudy" if its energy is below 80 % of a clear day
 MAX_LEAD_DAYS = 5           # forecasts from 1 … 5 days before (Open-Meteo Previous Runs API)
 LEADS = [(0, "short lead")] + [(d, f"{d} day{'s' if d > 1 else ''} ahead") for d in range(1, MAX_LEAD_DAYS + 1)]
 DEFAULT_PERIODS = [("2026-08-22", "2026-08-29")]       # race week 2026, local dates (ACST)
@@ -356,6 +364,75 @@ def main():
                            + ["" if not np.isfinite(v[i, j]) else round(float(v[i, j]), 1)
                               for v in series.values()])
 
+    # ---- cloud events: counts, no averages. For every forecast and lead time:
+    #      hit = clouds forecast and clouds came, miss = clouds came but not forecast,
+    #      false alarm = clouds forecast but did not come, correct clear = neither.
+    #      Hourly (exact hour, and with ±1 h tolerance for timing) and per whole day.
+    strong = (cs > 200) & np.isfinite(y)          # hours with enough sun to judge clouds
+    act_h = strong & (y < CLOUDY_HOUR * cs)
+
+    def widen(m):                                  # cloudy within ±1 h at the same point
+        out = m.copy()
+        out[:, 1:] |= m[:, :-1]
+        out[:, :-1] |= m[:, 1:]
+        return out
+    local_day = [local_date(t) for t in times]
+    days = sorted(set(local_day))
+    dpos = {d: [j for j, ld in enumerate(local_day) if ld == d] for d in days}
+
+    def day_energy(v):                             # kWh/m² per point and local day (sum, daytime)
+        out = np.full((n, len(days)), np.nan)
+        for di, d in enumerate(days):
+            js = dpos[d]
+            need = day[:, js]
+            vv = v[:, js]
+            ok = np.all(np.isfinite(vv) | ~need, axis=1) & need.any(axis=1)
+            out[:, di] = np.where(ok, np.where(need, vv, 0).sum(axis=1) / 1000.0, np.nan)
+        return out
+    e_act, e_cs = day_energy(y), day_energy(cs)
+    act_d = np.isfinite(e_act) & (e_act < CLOUDY_DAY * e_cs)
+    ok_d_act = np.isfinite(e_act)
+
+    ev_rows = []
+    for m in models:
+        for d, lab in LEADS:
+            k = f"{m} | {lab} | corrected" if f"{m} | {lab} | corrected" in series else f"{m} | {lab}"
+            if k not in series:
+                continue
+            f = series[k]
+            ok = strong & np.isfinite(f)
+            pred_h = ok & (f < CLOUDY_HOUR * cs)
+            a_h = act_h & ok
+            for scale, A, P in (("hour", a_h, pred_h), ("hour ±1 h", widen(a_h) & ok, widen(pred_h) & ok)):
+                # hit/miss: each actual cloud hour – was clouds forecast for it (within ±1 h)?
+                # false alarm: each forecast cloud hour – no actual clouds (within ±1 h)?
+                hits = int((a_h & P).sum())
+                misses = int((a_h & ~P).sum())
+                false_al = int((pred_h & ~A).sum())
+                clear_ok = int((ok & ~a_h & ~pred_h).sum())
+                ev_rows.append(dict(model=m, lead=lab, scale=scale, cloud_events=int(a_h.sum()),
+                                    hits=hits, misses=misses, false_alarms=false_al, correct_clear=clear_ok))
+            e_f = day_energy(f)
+            ok_d = ok_d_act & np.isfinite(e_f)
+            pred_d = ok_d & (e_f < CLOUDY_DAY * e_cs)
+            a_d = act_d & ok_d
+            ev_rows.append(dict(model=m, lead=lab, scale="day", cloud_events=int(a_d.sum()),
+                                hits=int((pred_d & a_d).sum()), misses=int((a_d & ~pred_d).sum()),
+                                false_alarms=int((pred_d & ~a_d).sum()),
+                                correct_clear=int((ok_d & ~a_d & ~pred_d).sum())))
+    with open(os.path.join(a.out, "cloud_events.csv"), "w", newline="") as fcsv:
+        w = csv.DictWriter(fcsv, fieldnames=["model", "lead", "scale", "cloud_events", "hits", "misses",
+                                             "false_alarms", "correct_clear"])
+        w.writeheader()
+        w.writerows(ev_rows)
+    if ev_rows:
+        print(f"\nCloud events (hour: < {CLOUDY_HOUR:.0%} of clear sky; day: < {CLOUDY_DAY:.0%} of a clear day):")
+        for r in ev_rows:
+            if r["scale"] in ("hour ±1 h", "day"):
+                print(f"  {r['model']:<13} {r['lead']:<13} {r['scale']:<10} "
+                      f"{r['hits']} of {r['cloud_events']} cloud {'days' if r['scale'] == 'day' else 'hours'} forecast, "
+                      f"{r['misses']} missed, {r['false_alarms']} false alarms")
+
     # ---- figure: hour by hour at four places
     try:
         import matplotlib
@@ -442,10 +519,45 @@ def main():
             plt.close(fig)
             saved.append("fig_timeseries.png")
 
+        # cloud events: hits / misses / false alarms per lead time (ECMWF corrected)
+        ev = [r for r in ev_rows if r["model"] == "ecmwf_ifs025"] or \
+             [r for r in ev_rows if r["model"] == (models[0] if models else "")]
+        if ev:
+            fig, axs = plt.subplots(1, 2, figsize=(14, 4.8))
+            for ax, scale, unit in ((axs[0], "hour ±1 h", "hours"), (axs[1], "day", "point-days")):
+                rows = [r for r in ev if r["scale"] == scale]
+                labs = [r["lead"] for r in rows]
+                x = np.arange(len(rows))
+                wbar = 0.27
+                for off, key, col, name in ((-wbar, "hits", "#2f9e44", "hit: clouds forecast and came"),
+                                            (0, "misses", "#d62728", "missed: clouds came, not forecast"),
+                                            (wbar, "false_alarms", "#f0a03c", "false alarm: forecast, did not come")):
+                    vals = [r[key] for r in rows]
+                    bars = ax.bar(x + off, vals, wbar, color=col, label=name)
+                    for b_, v in zip(bars, vals):
+                        ax.text(b_.get_x() + b_.get_width() / 2, b_.get_height(), str(v), ha="center",
+                                va="bottom", fontsize=7)
+                ax.set_xticks(x, [l_.replace(" ahead", "\nbefore").replace("short lead", "newest") for l_ in labs],
+                              fontsize=8)
+                ax.set_ylabel(f"number of {unit}")
+                total = rows[0]["cloud_events"] if rows else 0
+                ax.set_title(("Cloudy hours (timing ±1 h)" if scale != "day" else "Cloudy days") +
+                             f" – about {total} actual cloud {unit}", fontsize=10)
+                ax.grid(axis="y", alpha=0.3)
+            h_, l_ = axs[0].get_legend_handles_labels()
+            fig.legend(h_, l_, loc="lower center", ncol=3, fontsize=8)
+            mname = ev[0]["model"]
+            fig.suptitle(f"Did {mname}{' × %.2f' % BIAS_FACTOR[mname] if mname in BIAS_FACTOR else ''} "
+                         f"forecast the clouds? Counts per lead time")
+            fig.tight_layout(rect=(0, 0.07, 1, 1))
+            fig.savefig(os.path.join(a.out, "fig_cloud_events.png"), dpi=110)
+            plt.close(fig)
+
     except ImportError:
         print("matplotlib not installed – no figure (pip install matplotlib)")
 
-    print(f"\n→ results in {a.out}/: data_hourly.csv, fig_timeseries.png (ECMWF corrected: newest, "
+    print(f"\n→ results in {a.out}/: data_hourly.csv, cloud_events.csv, fig_cloud_events.png, "
+          f"fig_timeseries.png (ECMWF corrected: newest, "
           f"1 and 2 days before) and one figure per lead time "
           f"(fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_{MAX_LEAD_DAYS}days.png)")
 
