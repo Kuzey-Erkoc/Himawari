@@ -16,6 +16,10 @@ At most the next 5 days are calculated (--max-days): further ahead the forecasts
 unreliable. If the finish is not reached by then, the trip ends where the car is.
 
 Default models: ECMWF (best in the validation, om_valid.py) and GFS as second opinion.
+Uncertainty: for a real forecast the ECMWF ensemble (51 slightly different versions of the
+forecast) is fetched too. The plot shows the band in which 8 of 10 versions lie; per day the
+terminal says how much energy the versions give and whether the day is certain or uncertain
+(--no-ensemble to skip).
 All models forecast too little sunshine; their values are multiplied by a factor per model (BIAS_FACTOR, ECMWF × 1.06,
 checked against the car's weather station), off with --no-bias-correction.
 
@@ -49,6 +53,8 @@ import numpy as np
 FC_URL = "https://api.open-meteo.com/v1/forecast"
 HIST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 SAT_URL = "https://satellite-api.open-meteo.com/v1/archive"
+ENS_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
+ENS_MODEL = "ecmwf_ifs025"   # ECMWF ensemble: 51 slightly different versions of the same forecast
 LOCAL = dt.timedelta(hours=9, minutes=30)        # ACST
 STEP = dt.timedelta(minutes=5)
 BATCH = 50
@@ -252,6 +258,33 @@ def get_series(url, pts, base, label):
     return None, None
 
 
+def get_ensemble(pts, base):
+    """ECMWF ensemble: one Series per member (control + perturbed members). Open-Meteo keeps
+    ensemble data only for a few days back, so this is for real forecasts, not replays."""
+    ans = fetch(ENS_URL, pts, dict(base, models=ENS_MODEL, hourly="shortwave_radiation"), "ECMWF ensemble")
+    if not ans:
+        return []
+    first = next((d for d in ans if d), None)
+    keys = sorted(k for k in ((first or {}).get("hourly") or {}) if k.startswith("shortwave_radiation"))
+    members = []
+    for key in keys:
+        try:
+            s = Series(ans, key, "hourly", dt.timedelta(minutes=30), pts)
+        except ValueError:
+            continue
+        if s.n_values:
+            members.append(s)
+    return members
+
+
+def spread_word(p10, p90, clear):
+    """How certain is a day's energy? Width of the 10–90 % band relative to a clear day."""
+    if not (np.isfinite(p10) and np.isfinite(p90)) or clear <= 0:
+        return ""
+    w = (p90 - p10) / clear
+    return "certain" if w < 0.10 else "fairly certain" if w < 0.25 else "UNCERTAIN"
+
+
 # ---------------------------------------------------------------- clouds
 def cloud_flags(rows, name, thr):
     """Per row: True = cloud (less than thr of the clear-sky sunshine arrives), False =
@@ -406,6 +439,8 @@ def main():
     p.add_argument("--no-bias-correction", action="store_true",
                    help="use the model values as they come (default: multiply by BIAS_FACTOR, "
                         "e.g. ECMWF × 1.06)")
+    p.add_argument("--no-ensemble", action="store_true",
+                   help="skip the ECMWF ensemble (uncertainty band; only for real forecasts)")
     p.add_argument("--cloud-index", type=float, default=0.7,
                    help="'cloud' = less than this share of the clear-sky sunshine (default 0.7)")
     p.add_argument("--max-days", type=float, default=5,
@@ -486,6 +521,16 @@ def main():
             print(f"  actual (satellite): {block.replace('_', ' ')} values")
     if not any(k != "actual (satellite)" for k in series):
         sys.exit("No forecast could be fetched – see the messages above.")
+    ens = []
+    if not past and not a.no_ensemble:
+        ens = get_ensemble(pts, base)
+        fac = 1.0 if a.no_bias_correction else BIAS_FACTOR.get("ecmwf_ifs025", 1.0)
+        for s in ens:
+            s.k = np.clip(s.k * fac, 0, 1.3)
+        print(f"  ECMWF ensemble: {len(ens)} versions" + (f", × {fac:.2f} bias-corrected" if fac != 1.0 else "")
+              if ens else "  ECMWF ensemble: not available – no uncertainty band")
+    elif past and not a.no_ensemble:
+        print("  (ECMWF ensemble: Open-Meteo keeps it only a few days – no band for a past trip)")
 
     # sunshine at the car: linear between the two route points around its km
     names = list(series)
@@ -501,8 +546,9 @@ def main():
             vals[nme] = (1 - w) * va + w * vb if np.isfinite(va) and np.isfinite(vb) else \
                 (va if np.isfinite(va) else vb)
         near = pts[j][2] if w < 0.5 else pts[j + 1][2]
+        ev = np.array([(1 - w) * s.value(j, t) + w * s.value(j + 1, t) for s in ens], float)
         rows.append(dict(t=t, km=k, driving=driving, lat=clat, lon=clon, near=near,
-                         cs=float(clear_sky(clat, clon, t)), **{f"v:{n}": vals[n] for n in names}))
+                         cs=float(clear_sky(clat, clon, t)), ens=ev, **{f"v:{n}": vals[n] for n in names}))
 
     os.makedirs(a.out, exist_ok=True)
     fmt = lambda x: "" if x is None or not np.isfinite(x) else round(float(x))
@@ -512,12 +558,16 @@ def main():
         wr = csv.writer(f)
         wr.writerow(["time_local", "time_utc", "km", "nearest_point", "latitude", "longitude",
                      "status", "clear_sky_wm2"] + [f"ghi_{n.replace(' ', '_')}_wm2" for n in names]
-                    + [f"cloud_{fc_name.replace(' ', '_')}"])
+                    + [f"cloud_{fc_name.replace(' ', '_')}"]
+                    + (["ensemble_p10_wm2", "ensemble_p90_wm2"] if ens else []))
         for r, fl in zip(rows, flags_main):
             wr.writerow([f"{r['t'] + LOCAL:%Y-%m-%d %H:%M}", f"{r['t']:%Y-%m-%d %H:%M}",
                          round(r["km"], 1), r["near"], round(r["lat"], 4), round(r["lon"], 4),
                          "driving" if r["driving"] else "stopped", fmt(r["cs"])]
-                        + [fmt(r[f"v:{n}"]) for n in names] + ["" if fl is None else int(fl)])
+                        + [fmt(r[f"v:{n}"]) for n in names] + ["" if fl is None else int(fl)]
+                        + ([fmt(np.nanpercentile(r["ens"], 10)) if np.isfinite(r["ens"]).any() else "",
+                            fmt(np.nanpercentile(r["ens"], 90)) if np.isfinite(r["ens"]).any() else ""]
+                           if ens else []))
 
     # summary per local day: km driven, energy (all day, and while driving)
     h = STEP.total_seconds() / 3600
@@ -545,6 +595,17 @@ def main():
             first = np.array([r[f"v:{names[0]}"] for r in rs], float)
             line += f"   {names[0]}: {np.nansum(first) * h / 1000 * kwh:.1f} kWh"
         print(line)
+        if ens:
+            em = np.array([r["ens"] for r in rs], float)            # rows × members
+            good = np.isfinite(em).mean(axis=0) > 0.95
+            if good.any():
+                e_mem = np.nansum(em[:, good], axis=0) * h / 1000    # energy of each version
+                p10, p90 = np.percentile(e_mem, 10), np.percentile(e_mem, 90)
+                txt = (f"      ensemble ({good.sum()} versions): {p10:.2f}–{p90:.2f} kWh/m² in 8 of 10 "
+                       f"versions, all within {e_mem.min():.2f}–{e_mem.max():.2f} → {spread_word(p10, p90, csd)}")
+                if kwh:
+                    txt += f"; car {p10 * kwh:.1f}–{p90 * kwh:.1f} kWh"
+                print(txt)
     sh, under, tot = cloud_share(rows, flags_main)
     if sh is not None:
         print(f"  Cloud on the driven route ({fc_name}): {100 * sh:.0f} % ({under:.0f} of {tot:.0f} km, "
@@ -560,7 +621,15 @@ def main():
         fig, ax = plt.subplots(2, 1, figsize=(15, 7.5), sharex=True,
                                gridspec_kw=dict(height_ratios=[2, 1]))
         ax[0].fill_between(tl, [r["cs"] for r in rows], color="0.9", label="clear sky")
-        styles = {"actual (satellite)": dict(color="k", lw=1.8)}
+        styles = {"actual (satellite)": dict(color="k", lw=1.8), "ecmwf_ifs025": dict(color="#ff7f0e", lw=1.5),
+                  "gfs_global": dict(color="#2ca02c", lw=1.2), "icon_global": dict(color="#d62728", lw=1.2),
+                  "best_match": dict(color="#1f77b4", lw=1.2)}
+        if ens:
+            ok_e = [np.isfinite(r["ens"]).any() for r in rows]
+            p10s = [np.nanpercentile(r["ens"], 10) if o else np.nan for r, o in zip(rows, ok_e)]
+            p90s = [np.nanpercentile(r["ens"], 90) if o else np.nan for r, o in zip(rows, ok_e)]
+            ax[0].fill_between(tl, p10s, p90s, color="#ff7f0e", alpha=0.22, lw=0,
+                               label="ECMWF ensemble: 8 of 10 versions in this band")
         for n in names:
             ax[0].plot(tl, [r[f"v:{n}"] for r in rows], label=n, **styles.get(n, dict(lw=1.4)))
         stopped = np.array([not r["driving"] for r in rows])
