@@ -25,7 +25,7 @@ Output (folder validation_openmeteo_<start date>/):
                        actual, every forecast) – daytime hours only
   cloud_events.csv     counts per model and lead time: cloud hours/days that were forecast (hit),
                        missed, false alarms – hourly, hourly with ±1 h tolerance, and per day
-  fig_cloud_events.png the same for ECMWF as bar chart (counts, no averages)
+  fig_cloud_events.png the same as bar chart for ECMWF × 1.06 and GFS × 1.03 (counts, no averages)
   fig_timeseries.png   ECMWF × 1.06 only: newest forecast, 1 day and 2 days before in one figure,
                        actual vs. forecast hour by hour at the four places
   fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_5days.png
@@ -519,37 +519,41 @@ def main():
             plt.close(fig)
             saved.append("fig_timeseries.png")
 
-        # cloud events: hits / misses / false alarms per lead time (ECMWF corrected)
-        ev = [r for r in ev_rows if r["model"] == "ecmwf_ifs025"] or \
-             [r for r in ev_rows if r["model"] == (models[0] if models else "")]
-        if ev:
-            fig, axs = plt.subplots(1, 2, figsize=(14, 4.8))
-            for ax, scale, unit in ((axs[0], "hour ±1 h", "hours"), (axs[1], "day", "point-days")):
-                rows = [r for r in ev if r["scale"] == scale]
-                labs = [r["lead"] for r in rows]
-                x = np.arange(len(rows))
-                wbar = 0.27
-                for off, key, col, name in ((-wbar, "hits", "#2f9e44", "hit: clouds forecast and came"),
-                                            (0, "misses", "#d62728", "missed: clouds came, not forecast"),
-                                            (wbar, "false_alarms", "#f0a03c", "false alarm: forecast, did not come")):
-                    vals = [r[key] for r in rows]
-                    bars = ax.bar(x + off, vals, wbar, color=col, label=name)
-                    for b_, v in zip(bars, vals):
-                        ax.text(b_.get_x() + b_.get_width() / 2, b_.get_height(), str(v), ha="center",
-                                va="bottom", fontsize=7)
-                ax.set_xticks(x, [l_.replace(" ahead", "\nbefore").replace("short lead", "newest") for l_ in labs],
-                              fontsize=8)
-                ax.set_ylabel(f"number of {unit}")
-                total = rows[0]["cloud_events"] if rows else 0
-                ax.set_title(("Cloudy hours (timing ±1 h)" if scale != "day" else "Cloudy days") +
-                             f" – about {total} actual cloud {unit}", fontsize=10)
-                ax.grid(axis="y", alpha=0.3)
-            h_, l_ = axs[0].get_legend_handles_labels()
+        # cloud events: hits / misses / false alarms per lead time, one row per model (corrected)
+        ev_models = [m for m in ("ecmwf_ifs025", "gfs_global") if any(r["model"] == m for r in ev_rows)] \
+            or sorted({r["model"] for r in ev_rows})
+        if ev_models:
+            fig, axs = plt.subplots(len(ev_models), 2, figsize=(14, 4.3 * len(ev_models)), squeeze=False)
+            for c_i, (scale, unit) in enumerate((("hour ±1 h", "point-hours"), ("day", "point-days"))):
+                ymax = max([max(r["hits"], r["misses"], r["false_alarms"]) for r in ev_rows
+                            if r["scale"] == scale and r["model"] in ev_models] or [1])
+                for r_i, m in enumerate(ev_models):
+                    ax = axs[r_i, c_i]
+                    rows = [r for r in ev_rows if r["model"] == m and r["scale"] == scale]
+                    x = np.arange(len(rows))
+                    wbar = 0.27
+                    for off, key, col, name in ((-wbar, "hits", "#2f9e44", "hit: clouds forecast and came"),
+                                                (0, "misses", "#d62728", "missed: clouds came, not forecast"),
+                                                (wbar, "false_alarms", "#f0a03c", "false alarm: forecast, did not come")):
+                        vals = [r[key] for r in rows]
+                        bars = ax.bar(x + off, vals, wbar, color=col, label=name)
+                        for b_, v in zip(bars, vals):
+                            ax.text(b_.get_x() + b_.get_width() / 2, b_.get_height(), str(v), ha="center",
+                                    va="bottom", fontsize=7)
+                    ax.set_xticks(x, [r["lead"].replace(" ahead", "\nbefore").replace("short lead", "newest")
+                                      for r in rows], fontsize=8)
+                    ax.set_ylim(0, ymax * 1.12)                  # same scale for both models
+                    ax.set_ylabel(f"number of {unit}")
+                    total = rows[0]["cloud_events"] if rows else 0
+                    fac = f" × {BIAS_FACTOR[m]:.2f}" if m in BIAS_FACTOR else ""
+                    ax.set_title(f"{m}{fac}: " + ("cloudy hours (timing ±1 h)" if scale != "day" else "cloudy days")
+                                 + f" – {total} actual cloudy {unit}", fontsize=10)
+                    ax.grid(axis="y", alpha=0.3)
+            h_, l_ = axs[0, 0].get_legend_handles_labels()
             fig.legend(h_, l_, loc="lower center", ncol=3, fontsize=8)
-            mname = ev[0]["model"]
-            fig.suptitle(f"Did {mname}{' × %.2f' % BIAS_FACTOR[mname] if mname in BIAS_FACTOR else ''} "
-                         f"forecast the clouds? Counts per lead time")
-            fig.tight_layout(rect=(0, 0.07, 1, 1))
+            fig.suptitle("Did the models forecast the clouds? Counts per lead time "
+                         "(point-hours / point-days = summed over all route points)")
+            fig.tight_layout(rect=(0, 0.05, 1, 1))
             fig.savefig(os.path.join(a.out, "fig_cloud_events.png"), dpi=110)
             plt.close(fig)
 
