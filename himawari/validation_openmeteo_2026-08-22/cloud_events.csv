@@ -1,0 +1,37 @@
+model,lead,scale,cloud_events,hits,misses,false_alarms,correct_clear,forecast_clouds,confirmed,caught_pct,warning_right_pct,all_right_pct
+ecmwf_ifs025,short lead,hour,922,574,348,235,10020,809,574,62,71,95
+ecmwf_ifs025,short lead,hour ±1 h,922,633,289,155,10020,809,654,69,81,96
+ecmwf_ifs025,short lead,day,78,66,12,33,269,99,66,85,67,88
+ecmwf_ifs025,1 day ahead,hour,922,597,325,397,9858,994,597,65,60,94
+ecmwf_ifs025,1 day ahead,hour ±1 h,922,657,265,278,9858,994,716,71,72,95
+ecmwf_ifs025,1 day ahead,day,78,62,16,46,256,108,62,79,57,84
+ecmwf_ifs025,2 days ahead,hour,922,460,462,220,10035,680,460,50,68,94
+ecmwf_ifs025,2 days ahead,hour ±1 h,922,511,411,142,10035,680,538,55,79,95
+ecmwf_ifs025,2 days ahead,day,78,45,33,20,282,65,45,58,69,86
+ecmwf_ifs025,3 days ahead,hour,922,586,336,405,9850,991,586,64,59,93
+ecmwf_ifs025,3 days ahead,hour ±1 h,922,639,283,266,9850,991,725,69,73,95
+ecmwf_ifs025,3 days ahead,day,78,62,16,33,269,95,62,79,65,87
+ecmwf_ifs025,4 days ahead,hour,922,518,404,552,9703,1070,518,56,48,91
+ecmwf_ifs025,4 days ahead,hour ±1 h,922,581,341,405,9703,1070,665,63,62,93
+ecmwf_ifs025,4 days ahead,day,78,67,11,62,240,129,67,86,52,81
+ecmwf_ifs025,5 days ahead,hour,922,472,450,873,9382,1345,472,51,35,88
+ecmwf_ifs025,5 days ahead,hour ±1 h,922,544,378,728,9382,1345,617,59,46,90
+ecmwf_ifs025,5 days ahead,day,78,65,13,81,221,146,65,83,45,75
+gfs_global,short lead,hour,922,601,321,445,9810,1046,601,65,57,93
+gfs_global,short lead,hour ±1 h,922,727,195,318,9810,1046,728,79,70,95
+gfs_global,short lead,day,78,53,25,25,277,78,53,68,68,87
+gfs_global,1 day ahead,hour,922,530,392,405,9850,935,530,57,57,93
+gfs_global,1 day ahead,hour ±1 h,922,677,245,308,9850,935,627,73,67,95
+gfs_global,1 day ahead,day,78,45,33,23,279,68,45,58,66,85
+gfs_global,2 days ahead,hour,922,536,386,428,9827,964,536,58,56,93
+gfs_global,2 days ahead,hour ±1 h,922,654,268,311,9827,964,653,71,68,95
+gfs_global,2 days ahead,day,78,43,35,27,275,70,43,55,61,84
+gfs_global,3 days ahead,hour,922,514,408,563,9692,1077,514,56,48,91
+gfs_global,3 days ahead,hour ±1 h,922,637,285,433,9692,1077,644,69,60,94
+gfs_global,3 days ahead,day,78,40,38,50,252,90,40,51,44,77
+gfs_global,4 days ahead,hour,922,449,473,974,9281,1423,449,49,32,87
+gfs_global,4 days ahead,hour ±1 h,922,604,318,806,9281,1423,617,66,43,90
+gfs_global,4 days ahead,day,78,56,22,93,209,149,56,72,38,70
+gfs_global,5 days ahead,hour,922,553,369,1381,8874,1934,553,60,29,84
+gfs_global,5 days ahead,hour ±1 h,922,654,268,1210,8874,1934,724,71,37,87
+gfs_global,5 days ahead,day,78,53,25,118,184,171,53,68,31,62
