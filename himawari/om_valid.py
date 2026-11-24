@@ -22,6 +22,8 @@ Output (folder validation_openmeteo_<start date>/):
                        actual, every forecast) – daytime hours only
   fig_timeseries.png   ECMWF × 1.06 only: newest forecast, 1 day and 2 days before in one figure,
                        actual vs. forecast hour by hour at the four places
+  fig_timeseries_all_leads.png  ECMWF × 1.06, all lead times (newest … 5 days before) in one
+                       figure: dark orange = newest, pale = oldest
   fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_5days.png
                        one figure per lead time: actual vs. forecast hour by hour at Darwin,
                        Alice Springs, Coober Pedy and Adelaide
@@ -442,11 +444,40 @@ def main():
             plt.close(fig)
             saved.append("fig_timeseries.png")
 
+        # ECMWF corrected, all lead times in one figure: dark = newest, pale = oldest
+        all_leads = [(d, lab, f"{ec} | {lab} | corrected") for d, lab in LEADS if f"{ec} | {lab} | corrected" in series]
+        if all_leads:
+            shades = ["#8a3500", "#c25a00", "#e57f16", "#f0a03c", "#f3bd6e", "#f5d29a"]   # newest → oldest
+            fig, axs = plt.subplots(len(places), nper, figsize=(8 * nper, 2.8 * len(places)), squeeze=False)
+            for r_i, (pname, pla, plo) in enumerate(places):
+                i = int(np.argmin(haversine_km(lat, lon, pla, plo)))
+                for c_i, (d0, d1) in enumerate(pdates):
+                    ax = axs[r_i, c_i]
+                    js = [j for j, t in enumerate(times) if d0 <= local_date(t) <= d1]
+                    tt = loc([times[j] for j in js])
+                    ax.fill_between(tt, cs[i, js], color="0.93", label="clear sky")
+                    for d, lab, k in reversed(all_leads):          # oldest first, newest on top
+                        ax.plot(tt, series[k][i, js], color=shades[min(d, len(shades) - 1)], lw=1.0,
+                                label="newest forecast" if d == 0 else f"{d} day{'s' if d > 1 else ''} before")
+                    ax.plot(tt, y[i, js], color="k", lw=1.8, label="actual (satellite)")
+                    ax.set_title(f"{pname} ({pts[i][2]}, km {pkm[i]:.0f})", fontsize=10)
+                    ax.set_ylabel("GHI [W/m²]")
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
+            h_, l_ = axs[0, 0].get_legend_handles_labels()
+            order_ = [l_.index("actual (satellite)")] + [l_.index(x) for x in reversed(l_) if x not in ("actual (satellite)", "clear sky")] + [l_.index("clear sky")]
+            fig.legend([h_[q] for q in order_], [l_[q] for q in order_], loc="lower center", ncol=4, fontsize=8)
+            fig.suptitle(f"Actual (satellite) vs. ECMWF × {BIAS_FACTOR[ec]:.2f}, forecasts made 0 – {MAX_LEAD_DAYS} days before\n"
+                         f"dark = newest, pale = oldest · local time ACST", fontsize=11)
+            fig.tight_layout(rect=(0, 0.06, 1, 1))
+            fig.savefig(os.path.join(a.out, "fig_timeseries_all_leads.png"), dpi=110)
+            plt.close(fig)
+            saved.append("fig_timeseries_all_leads.png")
+
     except ImportError:
         print("matplotlib not installed – no figure (pip install matplotlib)")
 
     print(f"\n→ results in {a.out}/: data_hourly.csv, fig_timeseries.png (ECMWF corrected: newest, "
-          f"1 and 2 days before) and one figure per lead time "
+          f"1 and 2 days before), fig_timeseries_all_leads.png and one figure per lead time "
           f"(fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_{MAX_LEAD_DAYS}days.png)")
 
 
