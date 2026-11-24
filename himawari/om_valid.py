@@ -25,6 +25,8 @@ Output (folder validation_openmeteo_<start date>/):
                        actual, every forecast) – daytime hours only
   cloud_events.csv     counts per model and lead time: cloud hours/days that were forecast (hit),
                        missed, false alarms – hourly, hourly with ±1 h tolerance, and per day
+                       plus confidence in %: clouds caught (share of actual clouds that were
+                       forecast), warning right (share of forecast clouds that came), all right
   fig_cloud_events.png the same as bar chart for ECMWF × 1.06 and GFS × 1.03 (counts, no averages)
   fig_timeseries.png   ECMWF × 1.06 only: newest forecast, 1 day and 2 days before in one figure,
                        actual vs. forecast hour by hour at the four places
@@ -409,9 +411,11 @@ def main():
                 hits = int((a_h & P).sum())
                 misses = int((a_h & ~P).sum())
                 false_al = int((pred_h & ~A).sum())
+                confirmed = int((pred_h & A).sum())       # forecast cloud hours that came true
                 clear_ok = int((ok & ~a_h & ~pred_h).sum())
                 ev_rows.append(dict(model=m, lead=lab, scale=scale, cloud_events=int(a_h.sum()),
-                                    hits=hits, misses=misses, false_alarms=false_al, correct_clear=clear_ok))
+                                    hits=hits, misses=misses, false_alarms=false_al, correct_clear=clear_ok,
+                                    forecast_clouds=int(pred_h.sum()), confirmed=confirmed))
             e_f = day_energy(f)
             ok_d = ok_d_act & np.isfinite(e_f)
             pred_d = ok_d & (e_f < CLOUDY_DAY * e_cs)
@@ -419,10 +423,21 @@ def main():
             ev_rows.append(dict(model=m, lead=lab, scale="day", cloud_events=int(a_d.sum()),
                                 hits=int((pred_d & a_d).sum()), misses=int((a_d & ~pred_d).sum()),
                                 false_alarms=int((pred_d & ~a_d).sum()),
-                                correct_clear=int((ok_d & ~a_d & ~pred_d).sum())))
+                                correct_clear=int((ok_d & ~a_d & ~pred_d).sum()),
+                                forecast_clouds=int(pred_d.sum()), confirmed=int((pred_d & a_d).sum())))
+    # confidence in % (shares of counted cases): caught = share of actual clouds that were
+    # forecast; warning right = share of forecast clouds that came; all right = share of all
+    # judged hours/days where forecast and reality agreed (cloudy or clear)
+    pct = lambda num, den: round(100 * num / den) if den else ""
+    for r in ev_rows:
+        r["caught_pct"] = pct(r["hits"], r["cloud_events"])
+        r["warning_right_pct"] = pct(r["confirmed"], r["forecast_clouds"])
+        r["all_right_pct"] = pct(r["hits"] + r["correct_clear"],
+                                 r["cloud_events"] + r["correct_clear"] + r["false_alarms"])
     with open(os.path.join(a.out, "cloud_events.csv"), "w", newline="") as fcsv:
         w = csv.DictWriter(fcsv, fieldnames=["model", "lead", "scale", "cloud_events", "hits", "misses",
-                                             "false_alarms", "correct_clear"])
+                                             "false_alarms", "correct_clear", "forecast_clouds", "confirmed",
+                                             "caught_pct", "warning_right_pct", "all_right_pct"])
         w.writeheader()
         w.writerows(ev_rows)
     if ev_rows:
@@ -431,7 +446,8 @@ def main():
             if r["scale"] in ("hour ±1 h", "day"):
                 print(f"  {r['model']:<13} {r['lead']:<13} {r['scale']:<10} "
                       f"{r['hits']} of {r['cloud_events']} cloud {'days' if r['scale'] == 'day' else 'hours'} forecast, "
-                      f"{r['misses']} missed, {r['false_alarms']} false alarms")
+                      f"{r['misses']} missed, {r['false_alarms']} false alarms → clouds caught {r['caught_pct']} %, "
+                      f"warning right {r['warning_right_pct']} %")
 
     # ---- figure: hour by hour at four places
     try:
@@ -540,8 +556,9 @@ def main():
                         for b_, v in zip(bars, vals):
                             ax.text(b_.get_x() + b_.get_width() / 2, b_.get_height(), str(v), ha="center",
                                     va="bottom", fontsize=7)
-                    ax.set_xticks(x, [r["lead"].replace(" ahead", "\nbefore").replace("short lead", "newest")
-                                      for r in rows], fontsize=8)
+                    ax.set_xticks(x, [r["lead"].replace(" ahead", " before").replace("short lead", "newest")
+                                      + f"\ncaught {r['caught_pct']} %\nwarning right {r['warning_right_pct']} %"
+                                      for r in rows], fontsize=7.5)
                     ax.set_ylim(0, ymax * 1.12)                  # same scale for both models
                     ax.set_ylabel(f"number of {unit}")
                     total = rows[0]["cloud_events"] if rows else 0
@@ -552,8 +569,10 @@ def main():
             h_, l_ = axs[0, 0].get_legend_handles_labels()
             fig.legend(h_, l_, loc="lower center", ncol=3, fontsize=8)
             fig.suptitle("Did the models forecast the clouds? Counts per lead time "
-                         "(point-hours / point-days = summed over all route points)")
-            fig.tight_layout(rect=(0, 0.05, 1, 1))
+                         "(point-hours / point-days = summed over all route points)\n"
+                         "caught = share of actual clouds that were forecast · "
+                         "warning right = share of forecast clouds that really came", fontsize=11)
+            fig.tight_layout(rect=(0, 0.04, 1, 1))
             fig.savefig(os.path.join(a.out, "fig_cloud_events.png"), dpi=110)
             plt.close(fig)
 
