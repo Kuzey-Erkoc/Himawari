@@ -20,6 +20,8 @@ GFS × 1.03; off with --no-bias-correction).
 Output (folder validation_openmeteo_<start date>/):
   data_hourly.csv      all hourly values per route point (time UTC and local ACST, clear sky,
                        actual, every forecast) – daytime hours only
+  fig_timeseries.png   ECMWF × 1.06 only: newest forecast, 1 day and 2 days before in one figure,
+                       actual vs. forecast hour by hour at the four places
   fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_5days.png
                        one figure per lead time: actual vs. forecast hour by hour at Darwin,
                        Alice Springs, Coober Pedy and Adelaide
@@ -411,10 +413,40 @@ def main():
             plt.close(fig)
             saved.append(name)
 
+        # ECMWF only, corrected: newest, 1 day and 2 days before in one figure
+        ec = "ecmwf_ifs025"
+        ec_leads = [(lab, f"{ec} | {lab} | corrected", ls, col) for lab, ls, col in
+                    (("short lead", "-", "#ff7f0e"), ("1 day ahead", "--", "#c0560a"), ("2 days ahead", ":", "#7a3300"))]
+        ec_leads = [x for x in ec_leads if x[1] in series]
+        if ec_leads:
+            fig, axs = plt.subplots(len(places), nper, figsize=(8 * nper, 2.6 * len(places)), squeeze=False)
+            for r_i, (pname, pla, plo) in enumerate(places):
+                i = int(np.argmin(haversine_km(lat, lon, pla, plo)))
+                for c_i, (d0, d1) in enumerate(pdates):
+                    ax = axs[r_i, c_i]
+                    js = [j for j, t in enumerate(times) if d0 <= local_date(t) <= d1]
+                    tt = loc([times[j] for j in js])
+                    ax.fill_between(tt, cs[i, js], color="0.9", label="clear sky")
+                    ax.plot(tt, y[i, js], color="k", lw=1.6, label="actual (satellite)")
+                    for lab, k, ls, col in ec_leads:
+                        ax.plot(tt, series[k][i, js], ls, color=col, lw=1.2,
+                                label=f"ECMWF × {BIAS_FACTOR[ec]:.2f}, {lab}")
+                    ax.set_title(f"{pname} ({pts[i][2]}, km {pkm[i]:.0f})", fontsize=10)
+                    ax.set_ylabel("GHI [W/m²]")
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
+                    if r_i == 0 and c_i == 0:
+                        ax.legend(fontsize=7, loc="upper right", ncol=2)
+            fig.suptitle("Sunshine at four places: actual (satellite) vs. ECMWF corrected – local time ACST")
+            fig.tight_layout()
+            fig.savefig(os.path.join(a.out, "fig_timeseries.png"), dpi=110)
+            plt.close(fig)
+            saved.append("fig_timeseries.png")
+
     except ImportError:
         print("matplotlib not installed – no figure (pip install matplotlib)")
 
-    print(f"\n→ results in {a.out}/: data_hourly.csv and one figure per lead time "
+    print(f"\n→ results in {a.out}/: data_hourly.csv, fig_timeseries.png (ECMWF corrected: newest, "
+          f"1 and 2 days before) and one figure per lead time "
           f"(fig_timeseries_short_lead.png, fig_timeseries_1day.png … fig_timeseries_{MAX_LEAD_DAYS}days.png)")
 
 
