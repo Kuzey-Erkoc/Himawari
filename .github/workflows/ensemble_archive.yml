@@ -1,0 +1,41 @@
+# Every day: store the ECMWF ensemble forecast for the race route on the branch
+# "ensemble-archive" (folder ensemble_archive/). Open-Meteo deletes ensemble forecasts after a
+# few days, so we keep them ourselves to check the cloud probabilities later.
+name: ensemble-archive
+
+on:
+  schedule:
+    - cron: "17 10 * * *"   # 10:17 UTC = 19:47 in Darwin, after the 00 UTC ECMWF run
+  workflow_dispatch:         # "Run workflow" button on GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy requests
+      - name: Open the archive branch
+        run: |
+          if git ls-remote --exit-code --heads origin ensemble-archive; then
+            git worktree add -B ensemble-archive data origin/ensemble-archive
+          else
+            git worktree add --orphan -b ensemble-archive data
+          fi
+      - name: Fetch and save the ensemble forecast
+        run: python himawari/ensemble_archive.py --out data/ensemble_archive
+      - name: Commit
+        working-directory: data
+        run: |
+          git config user.name "ensemble-archive bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add ensemble_archive
+          git commit -m "Ensemble forecast $(date -u +%Y-%m-%d)" || echo "nothing new"
+          git push origin ensemble-archive
